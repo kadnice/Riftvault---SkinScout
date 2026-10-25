@@ -980,3 +980,99 @@ body.mode-aram .scout-row .scout-tag--team {
 body.mode-aram.layout-split .scout-list {
   flex-basis: 300px;
 }
+
+/* ─── "Guide only": the guide fills Skin Scout, skins hidden ─── */
+body.guide-only .scout-list,
+body.guide-only .scout-strip,
+body.guide-only .scout-focus {
+  display: none !important;
+}
+
+body.guide-only .scout-main {
+  display: flex;
+}
+
+body.guide-only .scout-guide {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  border: none !important;
+}
+
+.scout-guide__only {
+  padding: 4px 10px;
+  border: 1px solid var(--gold-dim);
+  border-radius: 4px;
+  background: none;
+  color: var(--gold-light);
+  font: 600 11.5px 'Inter', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scout-guide__only:hover {
+  border-color: var(--gold);
+}
+
+.scout-guide__only.is-active {
+  background: var(--gold);
+  color: #1a1306;
+}
+
+/* ─── Panel buttons: Build guide + Wiki / 3D model / Spotlight under it ─── */
+.focus-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+.focus-actions .focus-guide {
+  margin-left: 0;
+  justify-content: center;
+}
+
+.focus-links {
+  display: flex;
+  gap: 5px;
+}
+
+.focus-link {
+  flex: 1;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(10, 20, 40, 0.6);
+  color: var(--text-bright);
+  font: 500 12px 'Inter', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.focus-link:hover {
+  border-color: var(--gold-dim);
+  color: var(--gold-light);
+}
+
+.focus-link.is-active {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #1a1306;
+}
+
+/* The skin the 3D model / Spotlight panel is showing */
+.focus-card {
+  cursor: pointer;
+}
+
+.focus-card.is-picked .focus-card__art {
+  outline: 2px dashed var(--gold-light);
+  outline-offset: 3px;
+}
+
+/* The panel has two viewers (normal + YouTube-safe); only one shows at a time */
+.scout-guide__view.is-hidden {
+  display: none;
+}

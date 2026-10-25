@@ -71,6 +71,7 @@
         <header class="scout-guide__bar">
           <button class="scout-guide__back" id="scout-guide-back" title="Back to skins">&#8592; Skins</button>
           <div class="scout-guide__title" id="scout-guide-title">Build guide</div>
+          <button class="scout-guide__only" id="scout-guide-only" title="Hide the skins so the guide fills Skin Scout">Guide only</button>
           <button class="scout-guide__btn" id="scout-guide-popout" title="Open in a RiftVault tab instead">
             <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
               <path d="M9 2h5v5M14 2 7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5"
@@ -80,6 +81,9 @@
           <button class="scout-guide__btn" id="scout-guide-close" title="Close the guide">&#215;</button>
         </header>
         <webview class="scout-guide__view" id="scout-guide-view" src="about:blank"></webview>
+        <!-- YouTube (Spotlight) plays here: the same YouTube-safe session RiftVault's
+             own Spotlight tabs use, which avoids the ads -->
+        <webview class="scout-guide__view is-hidden" id="scout-guide-video" partition="persist:video" src="about:blank"></webview>
       </section>
     </div>
   </main>

@@ -10,5 +10,9 @@ contextBridge.exposeInMainWorld('scoutAPI', {
   equipSkin: (skinId) => ipcRenderer.invoke('select-skin', skinId),
   dismiss: () => ipcRenderer.send('scout-dismiss'),
   openGuide: (championKey, role) => ipcRenderer.send('scout-open-guide', championKey, role),
+  openUrl: (url, title) => ipcRenderer.send('scout-open-url', url, title),
+  setGuideMode: (keepOpen) => ipcRenderer.send('scout-guide-mode', keepOpen),
+  onGameStart: (callback) => ipcRenderer.on('scout-game', (event, info) => callback(info)),
+  onShowSpotlight: (callback) => ipcRenderer.on('scout-spotlight', (event, info) => callback(info)),
   openMainWindow: () => ipcRenderer.send('scout-open-main'),
 });

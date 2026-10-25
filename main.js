@@ -6,6 +6,7 @@ const { exec } = require('child_process');
 const scout = require('./scout-main');
 let scoutDiskCache = null;
 let mainWindow = null; // the main RiftVault window (created in createWindow)
+let trayMenu = null;   // the tray icon's right-click menu
 
 // ─── LCU LOCKFILE READER ───────────────────────────────────────────────────────
 
@@ -564,6 +565,10 @@ function createWindow() {
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0a0d14',
+    // Starts hidden: RiftVault opens to Skin Scout only. The main window loads
+    // in the background (it still fetches your collection) and can be shown
+    // from the tray menu ("Show / Hide RiftVault") or Skin Scout's footer.
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -585,14 +590,15 @@ function createWindow() {
   // ─── SYSTEM TRAY ───────────────────────────────────────────────────────────
   tray = new Tray(path.join(__dirname, 'assets/icon.ico'));
   tray.setToolTip('RiftVault');
-  const trayMenu = Menu.buildFromTemplate([
-    { label: 'Show RiftVault', click: () => { mainWindow.show(); mainWindow.focus(); } },
+  trayMenu = Menu.buildFromTemplate([
+    { label: 'Show / Hide RiftVault', click: toggleMainWindow },
     { id: 'scout-preview', label: 'Preview Skin Scout', type: 'checkbox', checked: false, click: (item) => { item.checked = scout.togglePreview(); } },
+    { label: 'Build guide during games', type: 'checkbox', checked: scout.isGuideInGameOn(), click: (item) => { item.checked = scout.toggleGuideInGame(); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
   ]);
   tray.setContextMenu(trayMenu);
-  tray.on('double-click', () => { mainWindow.show(); mainWindow.focus(); });
+  tray.on('double-click', toggleMainWindow);
 
   // Intercept close to hide to tray
   mainWindow.on('close', (e) => {
@@ -632,6 +638,7 @@ function createWindow() {
     },
   });
   ipcMain.on('scout-dismiss', () => scout.dismiss());
+  ipcMain.on('scout-guide-mode', (event, keepOpen) => scout.setKeepOpenForGuide(keepOpen));
   // Skin Scout's "Build guide" button: open Skill Capped in a RiftVault tab
   ipcMain.on('scout-open-guide', (event, championKey, role) => {
     const url = skillCappedUrl(championKey, role);
@@ -643,6 +650,17 @@ function createWindow() {
     });
   });
   ipcMain.on('scout-window', (event, action, headerHeight) => scout.windowAction(action, headerHeight));
+  // Skin Scout panel's pop-out button: open whatever the panel shows in a RiftVault tab
+  ipcMain.on('scout-open-url', (event, url, title) => {
+    let host = '';
+    try { host = new URL(url).hostname; } catch (e) { return; }
+    const allowed = /(^|\.)(skill-capped\.com|leagueoflegends\.com|modelviewer\.lol|youtube\.com)$/;
+    if (!url.startsWith('https://') || !allowed.test(host)) return;
+    if (isYouTubeUrl(url)) { openVideoTab(url, title || 'Spotlight'); return; }
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('live-game-event', { type: 'open-tab', url, title: title || host, icon: '🌐' });
+  });
   ipcMain.on('scout-open-main', () => { mainWindow.show(); mainWindow.focus(); });
 
   startChampSelectPolling();
@@ -659,7 +677,18 @@ function createWindow() {
 
 let cachedData = null;
 
-async function fetchSkinsData() {
+// If your collection is already being loaded (e.g. by the main window and by
+// Skin Scout at the same time at startup), share that one load instead of
+// asking the League client twice.
+let skinsLoadInFlight = null;
+function fetchSkinsData() {
+  if (!skinsLoadInFlight) {
+    skinsLoadInFlight = loadSkinsData().finally(() => { skinsLoadInFlight = null; });
+  }
+  return skinsLoadInFlight;
+}
+
+async function loadSkinsData() {
   const creds = await getLCUCredentials();
   if (!creds) {
     throw new Error('LEAGUE_NOT_RUNNING');
@@ -848,17 +877,27 @@ function openVideoTab(url, title = 'Spotlight') {
 // a Khada page with the YouTube video embedded (and YouTube's ads with it).
 // Instead, open the same Skin Spotlights page RiftVault's own Spotlight link
 // uses, which plays without that problem. Returns true if handled.
-function openKhadaSpotlight(url) {
+function khadaSpotlightTarget(url) {
   let u;
-  try { u = new URL(url); } catch (e) { return false; }
-  if (!/(^|\.)modelviewer\.lol$/.test(u.hostname) || !u.pathname.startsWith('/spotlight')) return false;
+  try { u = new URL(url); } catch (e) { return null; }
+  if (!/(^|\.)modelviewer\.lol$/.test(u.hostname) || !u.pathname.startsWith('/spotlight')) return null;
   const id = Number(u.searchParams.get('id'));
   const data = cachedData || scoutDiskCache;
   const skin = data && Array.isArray(data.skins) ? data.skins.find(s => s.id === id) : null;
-  if (!skin) return false; // unknown skin: fall back to opening Khada's page
+  if (!skin) return null; // unknown skin: fall back to opening Khada's page
   const query = encodeURIComponent(`${skin.name} Spotlight`).replace(/%20/g, '+');
   console.log(`[App] Khada Spotlight for ${skin.name} (${id}) -> Skin Spotlights channel`);
-  openVideoTab(`https://www.youtube.com/@SkinSpotlights/search?app=desktop&query=${query}`, `${skin.name} Spotlight`);
+  return {
+    url: `https://www.youtube.com/@SkinSpotlights/search?app=desktop&query=${query}`,
+    title: `${skin.name} Spotlight`,
+    skinId: skin.id,
+  };
+}
+
+function openKhadaSpotlight(url) {
+  const target = khadaSpotlightTarget(url);
+  if (!target) return false;
+  openVideoTab(target.url, target.title);
   return true;
 }
 
@@ -874,6 +913,31 @@ function openLinkTab(url) {
 
 app.on('web-contents-created', (event, contents) => {
   if (contents.getType() !== 'webview') return;
+
+  // Skin Scout's panel (build guide / wiki / 3D model / Spotlight): everything
+  // stays inside the panel — links that would open a new window load in the
+  // panel, and Khada's Spotlight button shows the Skin Spotlights page there
+  if (scout.isScoutHost(contents.hostWebContents)) {
+    // Khada's Spotlight button → switch the panel to its Spotlight mode for
+    // that skin, which plays in the panel's YouTube-safe viewer (no ads)
+    const showSpotlight = (target) => {
+      if (!scout.showSpotlightInPanel(target.skinId, target.title.replace(/ Spotlight$/, ''))) contents.loadURL(target.url);
+    };
+    contents.setWindowOpenHandler(({ url }) => {
+      const target = khadaSpotlightTarget(url);
+      if (target) showSpotlight(target);
+      else if (/^https?:/.test(url)) contents.loadURL(url);
+      return { action: 'deny' };
+    });
+    contents.on('will-navigate', (e, url) => {
+      const target = khadaSpotlightTarget(url);
+      if (!target) return;
+      e.preventDefault();
+      showSpotlight(target);
+    });
+    return;
+  }
+
   const videoSession = session.fromPartition(VIDEO_PARTITION);
   if (contents.session === videoSession) return; // already a YouTube-safe tab
 
@@ -928,12 +992,37 @@ if (!app.requestSingleInstanceLock()) {
   console.log('[App] RiftVault is already running. Showing the existing window instead.');
   app.quit();
 } else {
+  // Launched again while already running: bring Skin Scout back (and the
+  // main window too, if it's the one that was open)
   app.on('second-instance', () => {
-    if (!mainWindow) return;
+    if (mainWindow && mainWindow.isVisible()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+      return;
+    }
+    showScoutAtStartup();
+  });
+}
+
+// Tray "Show / Hide RiftVault" (and double-clicking the tray icon)
+function toggleMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    mainWindow.hide();
+  } else {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
-  });
+  }
+}
+
+// At launch only Skin Scout appears, in preview (all champions you own skins
+// for). It switches to the live view when champ select starts.
+function showScoutAtStartup() {
+  if (!scout.isPreviewOn()) scout.togglePreview();
+  // Keep the tray's "Preview Skin Scout" checkbox in sync
+  const item = trayMenu && trayMenu.getMenuItemById('scout-preview');
+  if (item) item.checked = scout.isPreviewOn();
 }
 
 app.whenReady().then(async () => {
@@ -941,6 +1030,7 @@ app.whenReady().then(async () => {
   // 5 seconds (the very first run has to download the blocklists)
   await Promise.race([enableAdBlocking(), new Promise(r => setTimeout(r, 5000))]);
   createWindow();
+  showScoutAtStartup();
 });
 
 app.on('window-all-closed', () => {
@@ -984,7 +1074,11 @@ async function hideToTrayWhenGameStarts(creds) {
   } catch (e) { return; }
   if (typeof phase !== 'string' || phase === lastGameflowPhase) return;
   console.log(`[App] League status: ${phase}`);
+  const previous = lastGameflowPhase;
   lastGameflowPhase = phase;
+  // Game just ended: put away a build guide that was kept open during it
+  const inGame = ['GameStart', 'InProgress', 'Reconnect'];
+  if (inGame.includes(previous) && !inGame.includes(phase)) scout.afterGame();
   // GameStart = loading screen, InProgress = in game, Reconnect = rejoining
   if (['GameStart', 'InProgress', 'Reconnect'].includes(phase)) {
     // hide() fully removes a window from the screen, the taskbar AND Alt+Tab,
@@ -1004,6 +1098,8 @@ function scoutStatus(msg) {
   lastScoutStatus = msg;
   console.log(`[Scout ${new Date().toLocaleTimeString()}] ${msg}`);
 }
+
+let lastChampStateKey = '';
 
 function startChampSelectPolling() {
   if (pollingInterval) return;
@@ -1044,14 +1140,19 @@ function startChampSelectPolling() {
             a => a.actorCellId === session.localPlayerCellId && a.type === 'pick' && a.completed
           );
 
-          // Emit champ select state so renderer can show/hide the Apply button
-          mainWindow.webContents.send('live-game-event', {
+          // Tell the main window about champ select, only when something changed
+          const stateMsg = {
             type: 'champ-select-state',
             active: isLockedIn,
             championId: champId || 0,
             currentSkinId: localPlayer.selectedSkinId || 0,
             position: localPlayer.assignedPosition || '', // top/jungle/middle/bottom/utility
-          });
+          };
+          const stateKey = JSON.stringify(stateMsg);
+          if (stateKey !== lastChampStateKey) {
+            lastChampStateKey = stateKey;
+            mainWindow.webContents.send('live-game-event', stateMsg);
+          }
           // (The original app popped the main window up when you locked in.
           // Skin Scout can equip skins now, so that pop-up was turned off to
           // keep fewer windows open.)
@@ -1075,6 +1176,7 @@ function startChampSelectPolling() {
           });
           lastChampSelectActive = false;
         }
+        lastChampStateKey = '';
         lastLockedIn = false;
       }
     } catch (e) {
@@ -1091,6 +1193,7 @@ function startChampSelectPolling() {
         });
         lastChampSelectActive = false;
       }
+      lastChampStateKey = '';
       lastLockedIn = false;
     }
     pollingInterval = setTimeout(poll, nextDelay);

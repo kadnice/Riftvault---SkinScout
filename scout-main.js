@@ -28,6 +28,7 @@ let lastPayloadJson = '';
 let skinLoadInFlight = false;
 let lastUpdateSummary = '';
 let surfaceOnNextShow = false;
+let lobbyStamp = 0;
 
 const BOUNDS_FILE = () => path.join(app.getPath('userData'), 'scout-window.json');
 const PREFS_FILE = () => path.join(app.getPath('userData'), 'scout-prefs.json');
@@ -35,9 +36,16 @@ const PREFS_FILE = () => path.join(app.getPath('userData'), 'scout-prefs.json');
 // Pinned = always stays above other windows (including League).
 // Unpinned = a normal window: clicking League brings League to the front.
 let pinned = false;
-try { pinned = !!JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8')).pinned; } catch (e) { /* default: unpinned */ }
+// "Build guide during games": when a game starts, switch to Guide only for the
+// champion you're playing and stay open (tray menu checkbox; on by default)
+let guideInGame = true;
+try {
+  const prefs = JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8'));
+  pinned = !!prefs.pinned;
+  if (prefs.guideInGame === false) guideInGame = false;
+} catch (e) { /* defaults */ }
 function savePrefs() {
-  try { fs.writeFileSync(PREFS_FILE(), JSON.stringify({ pinned })); } catch (e) { /* not important */ }
+  try { fs.writeFileSync(PREFS_FILE(), JSON.stringify({ pinned, guideInGame })); } catch (e) { /* not important */ }
 }
 
 // ─── WINDOW ───────────────────────────────────────────────────────────────────
@@ -356,16 +364,31 @@ function windowAction(action, headerHeight) {
   sendWindowState();
 }
 
+let pendingPayload = null; // newest update waiting for the window to finish loading
+
 function send(payload) {
   const json = JSON.stringify(payload);
   if (json === lastPayloadJson) return; // nothing changed — avoid flicker
   const win = ensureWindow();
-  const deliver = () => {
-    lastPayloadJson = json;
-    win.webContents.send('scout-update', payload);
-  };
-  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', deliver);
-  else deliver();
+  if (win.webContents.isLoading()) {
+    // Remember only the newest update, and wait for the page ONCE
+    // (adding a new wait on every check used to pile up listeners)
+    const firstWait = pendingPayload === null;
+    pendingPayload = { json, payload };
+    if (firstWait) {
+      win.webContents.once('did-finish-load', () => {
+        const p = pendingPayload;
+        pendingPayload = null;
+        if (p && !win.isDestroyed()) {
+          lastPayloadJson = p.json;
+          win.webContents.send('scout-update', p.payload);
+        }
+      });
+    }
+    return;
+  }
+  lastPayloadJson = json;
+  win.webContents.send('scout-update', payload);
 }
 
 function showWindow() {
@@ -388,8 +411,26 @@ function hideWindow() {
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
 
-/** Builds { championId: { id, name, key, iconUrl, skins: [...] } } for owned non-base skins */
+/** Champion id → { id, key, name }, for ANY champion (owned skins or not) */
+const champInfoCache = new WeakMap();
+function champInfo(data, id) {
+  if (!champInfoCache.has(data)) {
+    const map = {};
+    for (const s of data.skins || []) {
+      if (!map[s.championId] && s.championKey && s.championKey !== 'Unknown') {
+        map[s.championId] = { id: s.championId, key: s.championKey, name: s.championName };
+      }
+    }
+    champInfoCache.set(data, map);
+  }
+  return champInfoCache.get(data)[id] || null;
+}
+
+/** Builds { championId: { id, name, key, iconUrl, skins: [...] } } for owned non-base skins.
+ *  Remembered per collection, so it's built once instead of ~3 times a second. */
+const ownedIndexCache = new WeakMap();
 function buildOwnedIndex(data) {
+  if (ownedIndexCache.has(data)) return ownedIndexCache.get(data);
   const index = {};
   for (const s of data.skins || []) {
     if (!s.owned || s.isBase) continue;
@@ -413,8 +454,12 @@ function buildOwnedIndex(data) {
       fallbacks: s.imageFallbacks || [],
     });
   }
+  ownedIndexCache.set(data, index);
   return index;
 }
+
+let lastLoadError = '';
+let previewRetryTimer = null;
 
 function getSkinDataOrLoad() {
   const data = deps.getSkinData();
@@ -422,8 +467,17 @@ function getSkinDataOrLoad() {
   if (!skinLoadInFlight) {
     skinLoadInFlight = true;
     deps.loadSkinData()
-      .then(() => { if (isPreview) renderPreview(); })
-      .catch(e => console.warn('[Scout] Skin load failed:', e.message))
+      .then(() => { lastLoadError = ''; if (isPreview) renderPreview(); })
+      .catch(e => {
+        lastLoadError = e.message;
+        console.warn('[Scout] Skin load failed:', e.message);
+        // Preview open but League isn't running yet: try again in 10 s
+        if (isPreview) {
+          clearTimeout(previewRetryTimer);
+          previewRetryTimer = setTimeout(() => { if (isPreview) renderPreview(); }, 10000);
+          renderPreview();
+        }
+      })
       .finally(() => { skinLoadInFlight = false; });
   }
   return null;
@@ -467,7 +521,21 @@ function init(dependencies) {
   deps = dependencies;
 }
 
+let updateRunning = false;
+
+/** Called ~3 times a second during champ select. Skips a check if the previous
+ *  one is still waiting on the League client, so slow replies don't pile up. */
 async function update(session, creds) {
+  if (updateRunning) return;
+  updateRunning = true;
+  try {
+    await runUpdate(session, creds);
+  } finally {
+    updateRunning = false;
+  }
+}
+
+async function runUpdate(session, creds) {
   // A real champ select always wins over preview mode
   if (isPreview) {
     isPreview = false;
@@ -481,6 +549,7 @@ async function update(session, creds) {
     dismissedThisLobby = false;
     pickableIds = null;
     surfaceOnNextShow = true; // pop above League once when champ select starts
+    lobbyStamp = Date.now();  // lets the window know this is a NEW champ select
   }
   if (dismissedThisLobby) return;
 
@@ -497,6 +566,9 @@ async function update(session, creds) {
 
   const owned = buildOwnedIndex(data);
   const me = (session.myTeam || []).find(p => p.cellId === session.localPlayerCellId) || {};
+  // The champion you're actually playing (locked in, or your ARAM roll), even
+  // if you own no skins for it, so its build guide can be shown in game
+  lastMyChamp = me.championId ? champInfo(data, me.championId) : null;
   const myChampId = me.championId || 0;
   const hoverId = me.championPickIntent || me.championId || 0;
   const benchIds = session.benchEnabled
@@ -557,6 +629,8 @@ async function update(session, creds) {
 
   send({
     state: 'ready',
+    lobby: lobbyStamp,
+    myChamp: lastMyChamp,
     myRole: me.assignedPosition || '', // top/jungle/middle/bottom/utility ('' in ARAM)
     mode: isBenchMode ? 'bench' : 'draft',
     hoverId,
@@ -566,18 +640,56 @@ async function update(session, creds) {
   showWindow();
 }
 
+// "Guide only" mode (set from the window): keep Skin Scout open through the
+// game so the build guide stays on screen
+let keepOpenForGuide = false;
+function setKeepOpenForGuide(keep) {
+  keepOpenForGuide = !!keep;
+}
+
+let lastMyChamp = null;       // { id, key, name } of the champion you're playing
+let waitingForGame = null;    // timer: hide if champ select ended without a game
+let guideShownInGame = false; // Skin Scout is showing the guide during a game
+
+function willShowGuideInGame() {
+  return guideInGame && !!lastMyChamp && !dismissedThisLobby;
+}
+
 function clear() {
   if (!isActive) return;
   isActive = false;
-  dismissedThisLobby = false;
   pickableIds = null;
-  if (!isPreview) hideWindow();
+  // Closed with × during champ select: don't bring it back for the game either
+  if (dismissedThisLobby) lastMyChamp = null;
+  if (isPreview || keepOpenForGuide) { dismissedThisLobby = false; return; }
+  if (willShowGuideInGame()) {
+    // Stay up for the loading screen; if no game starts (e.g. a dodge), hide
+    clearTimeout(waitingForGame);
+    waitingForGame = setTimeout(() => {
+      waitingForGame = null;
+      if (!guideShownInGame) hideWindow();
+    }, 20000);
+    dismissedThisLobby = false;
+    return;
+  }
+  dismissedThisLobby = false;
+  hideWindow();
+}
+
+/** Called when a game has ended: tuck away a guide that was kept open */
+function afterGame() {
+  if (keepOpenForGuide || guideShownInGame) {
+    console.log('[Scout] Game over: hiding the build guide.');
+    hideWindow();
+  }
+  guideShownInGame = false;
+  lastMyChamp = null;
 }
 
 function renderPreview() {
   const data = getSkinDataOrLoad();
   if (!data) {
-    send({ state: 'loading', preview: true });
+    send({ state: lastLoadError === 'LEAGUE_NOT_RUNNING' ? 'waiting' : 'loading', preview: true });
     return;
   }
   const champions = Object.values(buildOwnedIndex(data))
@@ -606,7 +718,28 @@ function hideForGame() {
     lastPayloadJson = '';
     if (deps.onPreviewChange) deps.onPreviewChange(false);
   }
+  clearTimeout(waitingForGame);
+  waitingForGame = null;
+  if (guideInGame && lastMyChamp) {
+    // Switch to Guide only for the champion you're playing, and stay open
+    guideShownInGame = true;
+    console.log(`[Scout] Game starting: showing the ${lastMyChamp.name} build guide.`);
+    const win = ensureWindow();
+    showWindow();
+    win.webContents.send('scout-game', { champ: lastMyChamp });
+    return;
+  }
+  if (keepOpenForGuide) {
+    console.log('[Scout] Game starting: keeping the build guide open ("Guide only" mode).');
+    return;
+  }
   hideWindow();
+}
+
+function toggleGuideInGame() {
+  guideInGame = !guideInGame;
+  savePrefs();
+  return guideInGame;
 }
 
 function dismiss() {
@@ -622,5 +755,15 @@ function destroy() {
 
 module.exports = {
   init, update, clear, togglePreview, dismiss, destroy, windowAction, hideForGame,
+  afterGame, setKeepOpenForGuide, toggleGuideInGame,
+  // Is this the Skin Scout window? (used to keep panel links inside the panel)
+  isScoutHost: (wc) => !!(wc && scoutWindow && !scoutWindow.isDestroyed() && wc === scoutWindow.webContents),
+  // Tell the window to show this skin's Spotlight in its panel. False if it can't.
+  showSpotlightInPanel: (skinId, skinName) => {
+    if (!scoutWindow || scoutWindow.isDestroyed() || !skinId) return false;
+    scoutWindow.webContents.send('scout-spotlight', { skinId, skinName });
+    return true;
+  },
+  isGuideInGameOn: () => guideInGame,
   isPreviewOn: () => isPreview,
 };

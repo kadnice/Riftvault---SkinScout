@@ -44,11 +44,84 @@ const lastHtml = { list: '', strip: '', focus: '' };
 const guideEl = document.getElementById('scout-guide');
 const guideView = document.getElementById('scout-guide-view');
 const guideTitle = document.getElementById('scout-guide-title');
+const videoView = document.getElementById('scout-guide-video'); // YouTube-safe viewer
+let videoUrl = ''; // page loaded in the YouTube viewer
+
+function isYouTube(url) {
+  try { return /(^|\.)youtube\.com$/.test(new URL(url).hostname); } catch (e) { return false; }
+}
+
+/** Stops the YouTube viewer (so a hidden video doesn't keep playing) */
+function stopVideo() {
+  if (!videoUrl) return;
+  videoUrl = '';
+  videoView.setAttribute('src', 'about:blank');
+}
 let guideOpenWide = false;
 try { guideOpenWide = localStorage.getItem('scoutGuideOpen') === '1'; } catch (e) { /* storage unavailable */ }
 let guideOpenNarrow = false;
+// "Guide only": hide the skins so the guide fills Skin Scout, and keep Skin
+// Scout open during the game (RiftVault itself still hides to the tray)
+let guideOnly = false;
+try { guideOnly = localStorage.getItem('scoutGuideOnly') === '1'; } catch (e) { /* storage unavailable */ }
+let lastKeepOpen = null;
+let inGameChamp = null; // during a game: the champion whose guide is shown
+const guideOnlyBtn = document.getElementById('scout-guide-only');
 let guideUrl = '';          // page currently loaded in the guide panel
 let guideChamp = null;      // champion the guide is showing
+let guideTarget = null;     // { url, title } of what the panel shows
+
+// What the panel below the skins shows: 'guide' (Skill Capped), 'wiki',
+// 'model' (Khada 3D) or 'spotlight' (Skin Spotlights on YouTube)
+let panelMode = 'guide';
+const PANEL_LABELS = { guide: 'Build guide', wiki: 'Wiki', model: '3D model', spotlight: 'Spotlight' };
+// The skin used for 3D model / Spotlight: the one you last clicked
+let pickedSkinId = 0;
+let pickedSkinChampId = 0;
+let pickedSkinName = ''; // name of a picked skin you may not own (from Khada's page)
+
+function wikiUrl(champName) {
+  const n = champName === 'Nunu & Willump' ? 'Nunu' : champName;
+  return 'https://wiki.leagueoflegends.com/en-us/' + n.replace(/ /g, '_').replace(/'/g, '%27');
+}
+
+/** The skin for 3D model / Spotlight: your last click, else equipped, else the first */
+function panelSkin(champ) {
+  const skins = champ.skins || [];
+  return (pickedSkinChampId === champ.id && skins.find(s => s.id === pickedSkinId)) ||
+    skins.find(s => s.id === champ.selectedSkinId) || skins[0] || null;
+}
+
+/** Address + title for the panel, for this champion and the current mode */
+function panelTarget(champ) {
+  const role = (lastPayload && lastPayload.myRole) || '';
+  const skin = panelSkin(champ);
+  if (panelMode === 'wiki') return { url: wikiUrl(champ.name), title: `${champ.name} · Wiki` };
+  if (panelMode === 'model') {
+    // No owned skins (e.g. in game on a champion without skins): base model
+    const id = skin ? skin.id : champ.id * 1000;
+    return { url: `https://modelviewer.lol/model-viewer?id=${id}`, title: `${skin ? skin.name : champ.name} · 3D model` };
+  }
+  if (panelMode === 'spotlight') {
+    // A skin picked on Khada's page that you don't own isn't in your list: use its name
+    const unownedPick = pickedSkinName && pickedSkinChampId === champ.id &&
+      !(champ.skins || []).some(s => s.id === pickedSkinId);
+    const name = unownedPick ? pickedSkinName : (skin ? skin.name : champ.name);
+    const q = encodeURIComponent(`${name} Spotlight`).replace(/%20/g, '+');
+    return { url: `https://www.youtube.com/@SkinSpotlights/search?app=desktop&query=${q}`, title: `${name} · Spotlight` };
+  }
+  return { url: skillCappedUrl(champ.key, role), title: `${champ.name} · Build guide` };
+}
+
+/** Button handler: open the panel showing `mode`, or close it if it already does */
+function togglePanel(mode) {
+  if (guideVisible() && panelMode === mode) {
+    setGuideOpen(false);
+    return;
+  }
+  panelMode = mode;
+  setGuideOpen(true);
+}
 
 const GUIDE_ROLES = { top: 'top', jungle: 'jungle', middle: 'mid', bottom: 'adc', utility: 'support' };
 function skillCappedUrl(championKey, role) {
@@ -76,27 +149,65 @@ function setGuideOpen(open) {
 function updateGuide(champ) {
   const visible = guideVisible() && !!champ;
   document.body.classList.toggle('guide-open', visible);
-  if (!visible) return;
+  const onlyGuide = visible && guideOnly;
+  document.body.classList.toggle('guide-only', onlyGuide);
+  guideOnlyBtn.textContent = guideOnly ? 'Show skins' : 'Guide only';
+  guideOnlyBtn.classList.toggle('is-active', guideOnly);
+  guideOnlyBtn.title = guideOnly
+    ? 'Bring the skins back'
+    : 'Hide the skins so the guide fills Skin Scout (and stays open during the game)';
+  if (onlyGuide !== lastKeepOpen) {
+    lastKeepOpen = onlyGuide;
+    window.scoutAPI.setGuideMode(onlyGuide); // tells the app whether to keep Skin Scout open in game
+  }
+  if (!visible) { stopVideo(); return; }
   guideChamp = champ;
-  const role = (lastPayload && lastPayload.myRole) || '';
-  const url = skillCappedUrl(champ.key, role);
-  guideTitle.textContent = `${champ.name} build guide`;
-  if (url !== guideUrl) {
-    guideUrl = url;
-    guideView.setAttribute('src', url); // follows whichever champion you click
+  guideTarget = panelTarget(champ);
+  guideTitle.textContent = guideTarget.title;
+  // YouTube goes to the YouTube-safe viewer; everything else to the normal one
+  const video = isYouTube(guideTarget.url);
+  guideView.classList.toggle('is-hidden', video);
+  videoView.classList.toggle('is-hidden', !video);
+  if (video) {
+    if (guideTarget.url !== videoUrl) {
+      videoUrl = guideTarget.url;
+      videoView.setAttribute('src', guideTarget.url);
+    }
+  } else {
+    stopVideo();
+    if (guideTarget.url !== guideUrl) {
+      guideUrl = guideTarget.url;
+      guideView.setAttribute('src', guideTarget.url); // follows your champion / skin / button
+    }
   }
 }
+
+// Khada's Spotlight button (inside the panel): show that skin's Spotlight here
+window.scoutAPI.onShowSpotlight(({ skinId, skinName }) => {
+  if (!skinId) return;
+  pickedSkinId = skinId;
+  pickedSkinName = skinName || '';
+  pickedSkinChampId = Math.floor(skinId / 1000);
+  panelMode = 'spotlight';
+  setGuideOpen(true);
+});
 
 // Show the guide a little smaller so more of the page fits in the panel
 guideView.addEventListener('dom-ready', () => {
   try { guideView.setZoomFactor(0.9); } catch (e) { /* not important */ }
 });
 
+guideOnlyBtn.addEventListener('click', () => {
+  guideOnly = !guideOnly;
+  try { localStorage.setItem('scoutGuideOnly', guideOnly ? '1' : '0'); } catch (e) { /* not important */ }
+  if (lastPayload) render(lastPayload);
+});
+
 document.getElementById('scout-guide-close').addEventListener('click', () => setGuideOpen(false));
 document.getElementById('scout-guide-back').addEventListener('click', () => setGuideOpen(false));
 document.getElementById('scout-guide-popout').addEventListener('click', () => {
-  // Open the same guide in a RiftVault tab instead, and close the panel
-  if (guideChamp) window.scoutAPI.openGuide(guideChamp.key, (lastPayload && lastPayload.myRole) || '');
+  // Open whatever the panel shows in a RiftVault tab instead, and close the panel
+  if (guideTarget) window.scoutAPI.openUrl(guideTarget.url, guideTarget.title);
   setGuideOpen(false);
 });
 
@@ -318,11 +429,16 @@ function focusHtml(champ) {
     </div>`;
   }
   const hint = champ.canEquip ? 'Click a skin to equip it' : (champ.isMine ? 'Lock in to equip from here' : '');
+  const panelOpen = guideOpenWide;
+  // While the panel shows a 3D model or Spotlight, mark the skin it's showing
+  const skinPanel = panelOpen && (panelMode === 'model' || panelMode === 'spotlight');
+  const shownSkin = skinPanel ? panelSkin(champ) : null;
   const cards = champ.skins.map(s => {
     const cls = ['focus-card', `focus-card--${escapeHtml(s.rarity)}`];
     if (champ.canEquip) cls.push('can-equip');
     if (s.id === champ.selectedSkinId) cls.push('is-equipped');
-    return `<figure class="${cls.join(' ')}" data-skin-id="${s.id}" title="${escapeHtml(s.name)}">
+    if (shownSkin && s.id === shownSkin.id) cls.push('is-picked');
+    return `<figure class="${cls.join(' ')}" data-skin-id="${s.id}" data-champ-id="${champ.id}" title="${escapeHtml(s.name)}">
       <div class="focus-card__art">${imgTag(s.img, s.fallbacks)}</div>
       <figcaption class="focus-card__name">${escapeHtml(s.name)}</figcaption>
     </figure>`;
@@ -334,11 +450,18 @@ function focusHtml(champ) {
         <div class="focus-header__name">${escapeHtml(champ.name)} ${tagsFor(champ)}</div>
         <div class="focus-header__meta">${champ.skinCount} owned skin${champ.skinCount === 1 ? '' : 's'}${hint ? ` · ${hint}` : ''}</div>
       </div>
-      <button class="focus-guide${guideOpenWide ? ' is-active' : ''}" data-guide="${escapeHtml(champ.key)}" data-id="${champ.id}"
-        title="${guideOpenWide ? 'Hide the build guide' : 'Show the Skill Capped build guide next to your skins'}">
-        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg>
-        ${guideOpenWide ? 'Hide guide' : 'Build guide'}
-      </button>
+      <div class="focus-actions">
+        <button class="focus-guide${panelOpen && panelMode === 'guide' ? ' is-active' : ''}" data-panel="guide"
+          title="${panelOpen && panelMode === 'guide' ? 'Hide the build guide' : 'Show the Skill Capped build guide below'}">
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg>
+          ${panelOpen && panelMode === 'guide' ? 'Hide guide' : 'Build guide'}
+        </button>
+        <div class="focus-links">
+          ${['wiki', 'model', 'spotlight'].map(m => `
+            <button class="focus-link${panelOpen && panelMode === m ? ' is-active' : ''}" data-panel="${m}"
+              title="${panelOpen && panelMode === m ? 'Close' : `Show the ${PANEL_LABELS[m]} below`}">${PANEL_LABELS[m]}</button>`).join('')}
+        </div>
+      </div>
     </header>
     <div class="focus-cards">${cards}</div>`;
 }
@@ -348,15 +471,35 @@ function message(text) {
 }
 
 // ─── Main render ──────────────────────────────────────────────────────────────
+let lastLobby = 0;
+
 function render(payload) {
   lastPayload = payload;
+  // A new champ select always starts with the skins showing
+  if (payload.lobby && payload.lobby !== lastLobby) {
+    lastLobby = payload.lobby;
+    inGameChamp = null;
+    panelMode = 'guide';
+    pickedSkinId = 0;
+    if (guideOnly) {
+      guideOnly = false;
+      try { localStorage.setItem('scoutGuideOnly', '0'); } catch (e) { /* not important */ }
+    }
+  }
   const layout = currentLayout();
 
-  if (payload.state === 'loading') {
-    subEl.textContent = 'Loading your skins...';
-    setHtml(listEl, 'list', message('Reading your collection from the League client. This takes a few seconds the first time.'));
+  if (payload.state === 'loading' || payload.state === 'waiting') {
+    const waiting = payload.state === 'waiting';
+    subEl.textContent = waiting ? 'Waiting for League...' : 'Loading your skins...';
+    const text = waiting
+      ? 'Open the League client and your skins will appear here (checking every 10 seconds).'
+      : 'Reading your collection from the League client. This takes a few seconds the first time.';
+    setHtml(listEl, 'list', message(text));
     setHtml(stripEl, 'strip', '');
-    setHtml(focusEl, 'focus', '');
+    // The big panel shows it too (in Focus layout the list is hidden)
+    setHtml(focusEl, 'focus', layout === 'narrow' ? '' : `<div class="focus-empty">
+      <div class="focus-empty__title">${waiting ? 'Waiting for League' : 'Loading your skins'}</div>
+      <div>${escapeHtml(text)}</div></div>`);
     document.body.classList.remove('guide-open');
     return;
   }
@@ -418,8 +561,8 @@ function render(payload) {
   if (layout !== 'narrow' && setHtml(focusEl, 'focus', focusHtml(selected))) fitFocusCards();
   if (layout === 'narrow') setHtml(focusEl, 'focus', '');
 
-  // Build guide panel follows the selected champion
-  updateGuide(selected);
+  // Build guide panel follows the selected champion (during a game: your champion)
+  updateGuide(inGameChamp || selected);
 
   // Bring the selected champion into view when the client pick changes
   if (clientPickChanged && selectedId) {
@@ -446,16 +589,27 @@ bodyEl.addEventListener('error', (e) => {
 
 bodyEl.addEventListener('click', async (e) => {
   // "Build guide" buttons: open Skill Capped for that champion (and your role)
+  // Build guide / Wiki / 3D model / Spotlight buttons: open (or close) the panel
+  const panelBtn = e.target.closest('[data-panel]');
+  if (panelBtn) {
+    togglePanel(panelBtn.dataset.panel);
+    return;
+  }
+  // Book icon on a list row: build guide for that champion
   const guideBtn = e.target.closest('[data-guide]');
   if (guideBtn) {
-    const isHeaderToggle = guideBtn.classList.contains('focus-guide');
-    if (isHeaderToggle) {
-      setGuideOpen(!guideOpenWide); // big view: show/hide the panel
-    } else {
-      userPickId = Number(guideBtn.dataset.id); // list row: guide for that champion
-      setGuideOpen(true);
-    }
+    userPickId = Number(guideBtn.dataset.id);
+    panelMode = 'guide';
+    setGuideOpen(true);
     return;
+  }
+  // Clicking a big skin card picks it for the 3D model / Spotlight panel
+  const card = e.target.closest('.focus-card');
+  if (card) {
+    pickedSkinId = Number(card.dataset.skinId);
+    pickedSkinChampId = Number(card.dataset.champId);
+    pickedSkinName = '';
+    if (guideVisible() && (panelMode === 'model' || panelMode === 'spotlight') && lastPayload) render(lastPayload);
   }
   // Equip a skin (small thumbnails or big cards)
   const skinEl = e.target.closest('.scout-skin.can-equip, .focus-card.can-equip');
@@ -554,5 +708,18 @@ document.addEventListener('pointerup', endDrag);
 document.addEventListener('pointercancel', endDrag);
 document.addEventListener('lostpointercapture', endDrag);
 window.addEventListener('blur', endDrag);
+
+// Game starting: show the guide for the champion you're playing, Guide only
+window.scoutAPI.onGameStart(({ champ }) => {
+  if (!champ) return;
+  inGameChamp = champ;
+  panelMode = 'guide'; // during the game the panel shows the build guide
+  guideOnly = true; // not saved: the next champ select starts with skins again
+  if (currentLayout() === 'narrow') guideOpenNarrow = true;
+  else guideOpenWide = true;
+  guideUrl = ''; // make sure the right page loads
+  lastHtml.focus = '';
+  render(lastPayload || { state: 'ready', champions: [], availableCount: 0, mode: 'draft', hoverId: 0 });
+});
 
 window.scoutAPI.onUpdate(render);
