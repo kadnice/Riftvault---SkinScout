@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, shell, Tray, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen, shell, Tray, Menu, session } = require('electron');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -230,7 +230,19 @@ async function getChampionData() {
 // RARITY DETECTION (via CommunityDragon skins.json)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-let cdRarityMap = null; // skinId → { rarity, isLegacy, skinLines }
+let cdRarityMap = null; // skinId → { rarity, isLegacy, skinLines, image paths }
+
+/**
+ * Turns a League asset path like "/lol-game-data/assets/ASSETS/Characters/Sona/..."
+ * into a public CommunityDragon web address. CommunityDragon stores every file
+ * in lowercase, so the path is lowercased too.
+ */
+function cdAssetUrl(assetPath) {
+  if (!assetPath || typeof assetPath !== 'string') return null;
+  const rel = assetPath.replace(/^\/?lol-game-data\/assets\//i, '');
+  if (rel === assetPath) return null; // not a game-data path we know how to convert
+  return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/' + rel.toLowerCase();
+}
 
 async function fetchCDRarityMap() {
   if (cdRarityMap) return cdRarityMap;
@@ -260,6 +272,10 @@ async function fetchCDRarityMap() {
         rarity: rarityMap[r] || 'standard',
         isLegacy,
         skinLines: Array.isArray(skinData.skinLines) ? skinData.skinLines : [],
+        // Exact image files for this skin (used when Data Dragon has no image)
+        loadScreenPath: skinData.loadScreenPath || null,
+        tilePath: skinData.tilePath || null,
+        splashPath: skinData.uncenteredSplashPath || skinData.splashPath || null,
       };
     }
     console.log(`[CDragon] Loaded metadata for ${Object.keys(cdRarityMap).length} skins (${legacyCount} legacy)`);
@@ -423,6 +439,16 @@ async function buildOwnedSkins(creds) {
     const rarity = skinNum === 0 ? 'standard' : detectRarity(skin, cdMap);
 
     const cdEntry = cdMap[skin.id] || {};
+    // Backup image addresses, in order of preference. CommunityDragon's paths
+    // come first; the League client's own paths (if it reported any) after.
+    const imageFallbacks = [
+      cdAssetUrl(cdEntry.loadScreenPath),
+      cdAssetUrl(skin.loadScreenPath),
+      cdAssetUrl(cdEntry.tilePath),
+      cdAssetUrl(skin.tilePath),
+      cdAssetUrl(cdEntry.splashPath),
+      cdAssetUrl(skin.splashPath),
+    ].filter((u, i, all) => u && all.indexOf(u) === i); // drop blanks & duplicates
     return {
       id: skin.id,
       name: skin.name || `${champ.name} ${skinNum === 0 ? 'Classic' : 'Skin'}`,
@@ -438,6 +464,7 @@ async function buildOwnedSkins(creds) {
       mastery,
       splashUrl: `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${champ.id}_${skinNum}.jpg`,
       loadingUrl: `https://ddragon.leagueoflegends.com/cdn/img/champion/loading/${champ.id}_${skinNum}.jpg`,
+      imageFallbacks,
       skinLines: (cdEntry.skinLines && cdEntry.skinLines.length) ? cdEntry.skinLines : (skin.skinLines || []),
     };
   });
@@ -681,7 +708,55 @@ app.on('before-quit', () => {
   if (tray) { tray.destroy(); tray = null; }
 });
 
-app.whenReady().then(createWindow);
+// ─── AD BLOCKING FOR IN-APP TABS ──────────────────────────────────────────────
+// Uses the Ghostery adblocker library (same blocklists as uBlock Origin). It
+// downloads the latest lists once, saves a copy in RiftVault's data folder so
+// later startups are instant, and refreshes them when that copy is a week old.
+// If the library isn't installed, RiftVault simply runs without ad blocking.
+async function enableAdBlocking() {
+  let ElectronBlocker;
+  try {
+    ({ ElectronBlocker } = require('@ghostery/adblocker-electron'));
+  } catch (e) {
+    console.warn('[AdBlock] Library not installed. Run: npm install @ghostery/adblocker-electron');
+    return;
+  }
+  const listCache = path.join(app.getPath('userData'), 'adblock-engine.bin');
+  try {
+    // Throw away a cached copy older than 7 days so the lists stay current
+    if (fs.existsSync(listCache) && Date.now() - fs.statSync(listCache).mtimeMs > 7 * 24 * 3600 * 1000) {
+      fs.unlinkSync(listCache);
+    }
+    const blocker = await ElectronBlocker.fromPrebuiltAdsAndTracking(fetch, {
+      path: listCache,
+      read: fs.promises.readFile,
+      write: fs.promises.writeFile,
+    });
+    // The in-app tabs use the default session, so this covers all of them
+    try {
+      // Full blocking: stops ad downloads AND hides leftover ad boxes on pages.
+      // Newer versions of the library need Electron 35+ for the "hiding" part.
+      blocker.enableBlockingInSession(session.defaultSession);
+      console.log('[AdBlock] Ad blocking is on for in-app tabs.');
+    } catch (fullModeError) {
+      // Fallback: network blocking only. Ads are still stopped from loading;
+      // a page may just show an empty space where an ad would have been.
+      const ses = session.defaultSession;
+      ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, cb) => blocker.onBeforeRequest(details, cb));
+      ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, cb) => blocker.onHeadersReceived(details, cb));
+      console.log('[AdBlock] Ad blocking is on for in-app tabs (network mode: this Electron version is too old for page-cleanup mode).');
+    }
+  } catch (e) {
+    console.warn('[AdBlock] Could not start ad blocking:', e.message);
+  }
+}
+
+app.whenReady().then(async () => {
+  // Start ad blocking before any tab opens, but never hold up the app more than
+  // 5 seconds (the very first run has to download the blocklists)
+  await Promise.race([enableAdBlocking(), new Promise(r => setTimeout(r, 5000))]);
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -698,20 +773,43 @@ let lastHoveredChampId = null;
 let lastChampSelectActive = false;
 let lastLockedIn = false;
 
+// Prints a status line to the terminal only when the status changes, so the
+// terminal shows a readable story ("waiting…", "champ select found…") instead
+// of the same line twice a second.
+let lastScoutStatus = '';
+function scoutStatus(msg) {
+  if (msg === lastScoutStatus) return;
+  lastScoutStatus = msg;
+  console.log(`[Scout ${new Date().toLocaleTimeString()}] ${msg}`);
+}
+
 function startChampSelectPolling() {
   if (pollingInterval) return;
 
   async function poll() {
     if (!mainWindow) { pollingInterval = setTimeout(poll, 2500); return; }
     const creds = getLCUCredentials();
-    if (!creds) { pollingInterval = setTimeout(poll, 2500); return; }
+    if (!creds) {
+      scoutStatus('Cannot find the League client (no lockfile/credentials).');
+      pollingInterval = setTimeout(poll, 2500);
+      return;
+    }
 
     let nextDelay = 2500; // default idle rate
 
     try {
       const session = await lcuRequest(creds.port, creds.password, '/lol-champ-select/v1/session');
       if (session && session.localPlayerCellId !== undefined) {
-        const localPlayer = session.myTeam.find(p => p.cellId === session.localPlayerCellId);
+        const myTeam = Array.isArray(session.myTeam) ? session.myTeam : [];
+        const localPlayer = myTeam.find(p => p.cellId === session.localPlayerCellId);
+        scoutStatus(localPlayer
+          ? `Champ select detected (you are cell ${session.localPlayerCellId}, ${myTeam.length} on your team).`
+          : `Champ select detected, but you weren't found on your team list (cell ${session.localPlayerCellId}; team cells: ${myTeam.map(p => p.cellId).join(', ') || 'none'}).`);
+
+        // Skin Scout runs whether or not the local player was found above
+        scout.update(session, creds).catch(e => console.warn('[Scout] update failed:', e.stack || e.message));
+        nextDelay = 300; // check often in champ select so hovers show up quickly
+
         if (localPlayer) {
           const champId = localPlayer.championId || localPlayer.championPickIntent;
           if (champId && champId !== lastHoveredChampId && champId !== 0) {
@@ -740,10 +838,12 @@ function startChampSelectPolling() {
           }
           lastLockedIn = isLockedIn;
           lastChampSelectActive = true;
-          scout.update(session, creds).catch(e => console.warn('[Scout]', e.message));
-          nextDelay = 500; // faster polling during champ select
         }
       } else {
+        const reason = session && (session.message || session.errorCode)
+          ? `${session.errorCode || ''} ${session.message || ''}`.trim()
+          : 'unexpected reply';
+        scoutStatus(`Connected to League. Not in champ select (client says: ${reason}).`);
         lastHoveredChampId = null;
         scout.clear();
         if (lastChampSelectActive) {
@@ -758,6 +858,7 @@ function startChampSelectPolling() {
         lastLockedIn = false;
       }
     } catch (e) {
+      scoutStatus(`Error talking to the League client: ${e.message}`);
       lastHoveredChampId = null;
       scout.clear();
       if (lastChampSelectActive) {

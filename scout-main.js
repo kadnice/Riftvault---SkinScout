@@ -26,6 +26,7 @@ let pickableIds = null;        // cached pickable champion IDs for this lobby
 let pickableFetchedAt = 0;
 let lastPayloadJson = '';
 let skinLoadInFlight = false;
+let lastUpdateSummary = '';
 
 const BOUNDS_FILE = () => path.join(app.getPath('userData'), 'scout-window.json');
 
@@ -192,6 +193,7 @@ function buildOwnedIndex(data) {
       name: s.name,
       rarity: s.rarity,
       img: s.loadingUrl,
+      fallbacks: s.imageFallbacks || [],
     });
   }
   return index;
@@ -266,6 +268,10 @@ async function update(session, creds) {
 
   const data = getSkinDataOrLoad();
   if (!data) {
+    if (lastUpdateSummary !== 'loading') {
+      lastUpdateSummary = 'loading';
+      console.log('[Scout] Waiting for your skin collection to finish loading…');
+    }
     send({ state: 'loading' });
     showWindow();
     return;
@@ -284,6 +290,13 @@ async function update(session, creds) {
       .filter(p => p.cellId !== session.localPlayerCellId && p.championId)
       .map(p => p.championId)
     : [];
+
+  // Can you equip a skin right now? Only on your own champion, and only once it's
+  // really yours: locked in (draft/blind) or assigned (ARAM, where there's no lock-in).
+  const lockedIn = (session.actions || []).flat().some(
+    a => a.actorCellId === session.localPlayerCellId && a.type === 'pick' && a.completed);
+  const canEquip = !!myChampId && (isBenchMode || lockedIn);
+  const selectedSkinId = me.selectedSkinId || 0;
 
   let candidateIds;
   if (isBenchMode) {
@@ -309,12 +322,20 @@ async function update(session, creds) {
       isMine: id === myChampId,
       onBench: benchIds.includes(id),
       onTeam: teammateIds.includes(id),
+      canEquip: canEquip && id === myChampId,
+      selectedSkinId: id === myChampId ? selectedSkinId : 0,
     });
   }
 
   // Your current champ first (ARAM), then most skins, then alphabetical
   champions.sort((a, b) =>
     (b.isMine - a.isMine) || (b.skinCount - a.skinCount) || a.name.localeCompare(b.name));
+
+  const summary = `Showing ${champions.length} of ${seen.size} available champions (${isBenchMode ? 'ARAM' : 'draft/blind'} mode).`;
+  if (summary !== lastUpdateSummary) {
+    lastUpdateSummary = summary;
+    console.log(`[Scout] ${summary}`);
+  }
 
   send({
     state: 'ready',

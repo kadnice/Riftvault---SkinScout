@@ -74,6 +74,75 @@ const wikiLink = document.getElementById('wiki-link');
 const modelLink = document.getElementById('model-link');
 const spotlightLink = document.getElementById('spotlight-link');
 
+// ─── VIDEO SPEED CONTROLS (for in-app web tabs) ───────────────────────────────
+// This text is a small program that gets run *inside* each web page a tab
+// loads (e.g. YouTube Skin Spotlights). It works like the "Video Speed
+// Controller" browser extension:
+//   S = slower (−0.25×)   D = faster (+0.25×)   R = reset to 1×
+//   Z = back 10 seconds   X = forward 10 seconds
+// It ignores keys while you're typing in a search box, and shows the current
+// speed in a small badge on the video.
+const VIDEO_SPEED_SCRIPT = `
+(() => {
+  if (window.__rvSpeedInstalled) return;
+  window.__rvSpeedInstalled = true;
+
+  let speed = 1;
+  let badge = null;
+  let hideTimer = null;
+
+  const videos = () => Array.from(document.querySelectorAll('video'));
+
+  function showBadge(text) {
+    const v = videos().find(v => v.offsetWidth > 0) || null;
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.style.cssText = 'position:fixed;z-index:2147483647;padding:4px 9px;border-radius:4px;' +
+        'background:rgba(1,10,19,0.85);color:#f0e6d2;border:1px solid #c89b3c;' +
+        'font:600 14px Inter,system-ui,sans-serif;pointer-events:none;transition:opacity .2s;';
+      document.documentElement.appendChild(badge);
+    }
+    const r = v ? v.getBoundingClientRect() : { top: 10, left: 10 };
+    badge.style.top = (Math.max(r.top, 0) + 12) + 'px';
+    badge.style.left = (Math.max(r.left, 0) + 12) + 'px';
+    badge.textContent = text;
+    badge.style.opacity = '1';
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { badge.style.opacity = '0'; }, 1200);
+  }
+
+  function setSpeed(next) {
+    speed = Math.min(4, Math.max(0.25, Math.round(next * 100) / 100));
+    videos().forEach(v => { v.playbackRate = speed; });
+    showBadge(speed + '×');
+  }
+
+  // Sites like YouTube reset the speed when a new video starts; put ours back
+  document.addEventListener('play', (e) => {
+    if (e.target instanceof HTMLVideoElement && e.target.playbackRate !== speed) {
+      e.target.playbackRate = speed;
+    }
+  }, true);
+
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    const typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+    if (typing || e.ctrlKey || e.altKey || e.metaKey || videos().length === 0) return;
+    const key = e.key.toLowerCase();
+    if (key === 'd') setSpeed(speed + 0.25);
+    else if (key === 's') setSpeed(speed - 0.25);
+    else if (key === 'r') setSpeed(1);
+    else if (key === 'x' || key === 'z') {
+      const v = videos().find(v => !v.paused) || videos()[0];
+      v.currentTime = Math.max(0, v.currentTime + (key === 'x' ? 10 : -10));
+      showBadge(key === 'x' ? '+10s' : '−10s');
+    } else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+})();
+`;
+
 // ─── TAB MANAGER ──────────────────────────────────────────────────────────────
 const TabManager = {
     tabs: [{ id: 'home', type: 'home', title: 'Collection', closable: false }],
@@ -117,6 +186,31 @@ const TabManager = {
         pane.id = `pane-${id}`;
         pane.innerHTML = `<webview src="${url}" style="width:100%;height:100%;" allowpopups></webview>`;
         document.getElementById('webview-container').appendChild(pane);
+
+        // Video speed controls (S = slower, D = faster, R = reset), added to
+        // every page this tab loads
+        pane.querySelector('webview').addEventListener('dom-ready', (e) => {
+            e.target.executeJavaScript(VIDEO_SPEED_SCRIPT).catch(() => { /* page blocked scripts */ });
+        });
+
+        // Khada's 3D viewer sometimes bounces a direct model link to its home
+        // page. If that happens, re-open the model link (up to 2 retries).
+        if (/^https:\/\/modelviewer\.lol\/model-viewer\?id=/.test(url)) {
+            const webview = pane.querySelector('webview');
+            let retries = 0;
+            const checkBounce = (e) => {
+                let landed;
+                try { landed = new URL(e.url); } catch (err) { return; }
+                const isHome = landed.hostname === 'modelviewer.lol' && (landed.pathname === '/' || landed.pathname === '');
+                if (isHome && retries < 2) {
+                    retries++;
+                    console.warn(`[3D] Khada sent us to its home page; retrying (${retries}/2): ${url}`);
+                    setTimeout(() => webview.loadURL(url), 600 * retries);
+                }
+            };
+            webview.addEventListener('did-navigate', checkBounce);
+            webview.addEventListener('did-navigate-in-page', checkBounce);
+        }
 
         this.switchTab(id);
         return id;
@@ -1196,12 +1290,21 @@ function createSkinCard(skin) {
     img.className = 'skin-card-img loading';
     img.alt = skin.name;
     img.loading = 'lazy';
-    img.src = skin.loadingUrl;
+    // Try each image address in turn until one loads: Data Dragon first (best
+    // framing), then CommunityDragon's exact files for this skin ID.
+    const imageUrls = [skin.loadingUrl, ...(skin.imageFallbacks || []), skin.splashUrl].filter(Boolean);
+    let imageIndex = 0;
+    img.src = imageUrls[0];
     img.onload = () => img.classList.remove('loading');
     img.onerror = () => {
-        img.classList.remove('loading');
-        img.src = skin.splashUrl;
-        img.onerror = () => (img.style.display = 'none');
+        imageIndex++;
+        if (imageIndex < imageUrls.length) {
+            img.src = imageUrls[imageIndex];
+        } else {
+            img.classList.remove('loading');
+            img.style.display = 'none';
+            console.warn(`[Images] No image found for skin ${skin.id} (${skin.name})`);
+        }
     };
     maskWrapper.appendChild(img);
 
@@ -1349,7 +1452,13 @@ function openModal(skin) {
 
     modalChamp.textContent = skin.championName;
     modalName.textContent = skin.name;
+    // Rarity label, plus the skin's ID number in small text (handy for spotting
+    // skins whose ID doesn't match what websites like Khada expect)
     modalId.textContent = skin.isBase ? 'Base Skin' : skin.isLegacy ? 'Legacy Vault' : skin.rarity.toUpperCase();
+    const idTag = document.createElement('span');
+    idTag.textContent = ` · ID ${skin.id}`;
+    idTag.style.cssText = 'opacity:0.55;font-size:0.85em;letter-spacing:0;';
+    modalId.appendChild(idTag);
 
     // Setup Price
     const priceNode = document.querySelector('.modal-price');
@@ -1399,7 +1508,15 @@ function openModal(skin) {
     requestAnimationFrame(() => {
         modalBackdrop.classList.add('open');
     });
-    modalSplash.src = skin.splashUrl;
+    // Big splash: Data Dragon first, then CommunityDragon backups (splash files last
+    // in the list are the widest, so try those before the narrow load screens)
+    const splashUrls = [skin.splashUrl, ...[...(skin.imageFallbacks || [])].reverse()].filter(Boolean);
+    let splashIndex = 0;
+    modalSplash.onerror = () => {
+        splashIndex++;
+        if (splashIndex < splashUrls.length) modalSplash.src = splashUrls[splashIndex];
+    };
+    modalSplash.src = splashUrls[0];
     modalBackdrop.style.display = 'flex';
 
     // ─── Apply in Client button logic ─────────────────────────────────────────

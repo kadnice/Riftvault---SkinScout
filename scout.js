@@ -97,13 +97,21 @@ function renderRow(champ, hoverId, openIds) {
   if (champ.onBench) tags.push('<span class="scout-tag scout-tag--bench">Bench</span>');
   if (champ.onTeam) tags.push('<span class="scout-tag scout-tag--team">Team</span>');
 
-  const skins = champ.skins.map(s => `
-    <div class="scout-skin scout-skin--${escapeHtml(s.rarity)}" title="${escapeHtml(s.name)}">
-      <img src="${escapeHtml(s.img)}" alt="" loading="lazy" />
-    </div>`).join('');
+  const skins = champ.skins.map(s => {
+    const skinClasses = ['scout-skin', `scout-skin--${escapeHtml(s.rarity)}`];
+    if (champ.canEquip) skinClasses.push('can-equip');
+    if (s.id === champ.selectedSkinId) skinClasses.push('is-equipped');
+    const title = champ.canEquip ? `${s.name} (click to equip)` : s.name;
+    return `
+    <div class="${skinClasses.join(' ')}" data-skin-id="${s.id}" title="${escapeHtml(title)}">
+      <img src="${escapeHtml(s.img)}" alt="" loading="lazy"
+        data-fallbacks="${escapeHtml(JSON.stringify(s.fallbacks || []))}" />
+    </div>`;
+  }).join('');
 
   const classes = ['scout-row'];
-  if (champ.id === hoverId) classes.push('is-hovered', 'is-open');
+  // Your own champion stays open once you can equip, so the skins are right there
+  if (champ.id === hoverId || champ.canEquip) classes.push('is-hovered', 'is-open');
   else if (openIds.has(champ.id)) classes.push('is-open');
 
   return `
@@ -162,13 +170,45 @@ function render(payload) {
   listEl.innerHTML = shown.map(c => renderRow(c, hoverId, openIds)).join('');
   listEl.scrollTop = scrollTop;
 
-  // When you hover a new champion in the client, scroll its row into view
+  // When you hover a new champion in the client, jump straight to its row.
+  // (This used to be a smooth animated scroll, but the list redraws every half
+  // second, which kept interrupting the animation, so it crawled along in steps.)
   if (hoverId && hoverId !== lastHoverId) {
     const row = listEl.querySelector(`.scout-row[data-id="${hoverId}"]`);
-    if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (row) row.scrollIntoView({ block: 'center', behavior: 'auto' });
   }
   lastHoverId = hoverId;
 }
+
+// If a skin thumbnail fails to load, try its backup addresses one by one.
+// (Image errors don't "bubble up" like clicks do, so we listen in the capture phase.)
+listEl.addEventListener('error', (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.dataset.fallbacks) return;
+  let fallbacks = [];
+  try { fallbacks = JSON.parse(img.dataset.fallbacks); } catch (err) { /* ignore */ }
+  const next = fallbacks.shift();
+  img.dataset.fallbacks = JSON.stringify(fallbacks);
+  if (next) img.src = next;
+}, true);
+
+// Clicking one of your skins equips it in the League client
+listEl.addEventListener('click', async (e) => {
+  const skinEl = e.target.closest('.scout-skin.can-equip');
+  if (!skinEl) return;
+  const skinId = Number(skinEl.dataset.skinId);
+  skinEl.classList.add('is-equipping');
+  const res = await window.scoutAPI.equipSkin(skinId);
+  skinEl.classList.remove('is-equipping');
+  if (res && res.success) {
+    // Show the new selection right away; the next update from the client confirms it
+    listEl.querySelectorAll('.scout-skin.is-equipped').forEach(el => el.classList.remove('is-equipped'));
+    skinEl.classList.add('is-equipped');
+  } else {
+    skinEl.classList.add('is-failed');
+    setTimeout(() => skinEl.classList.remove('is-failed'), 800);
+  }
+});
 
 // Mouse hover on a row expands it (in addition to client-hover expansion)
 listEl.addEventListener('mouseover', (e) => {

@@ -277,6 +277,29 @@ body.is-collapsed .scout-footer {
   background: #000;
 }
 
+/* Your own champion's skins: clickable to equip */
+.scout-skin.can-equip {
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s, opacity 0.12s;
+}
+
+.scout-skin.can-equip:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 1px var(--gold-dim);
+}
+
+.scout-skin.is-equipped {
+  box-shadow: 0 0 0 2px var(--gold), 0 0 10px rgba(200, 155, 60, 0.45);
+}
+
+.scout-skin.is-equipping {
+  opacity: 0.5;
+}
+
+.scout-skin.is-failed {
+  box-shadow: 0 0 0 2px #e05a5a;
+}
+
 .scout-skin img {
   width: 100%;
   height: 100%;

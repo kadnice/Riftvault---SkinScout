@@ -24,6 +24,7 @@
     "electron-builder": "^24.9.1"
   },
   "dependencies": {
+    "@ghostery/adblocker-electron": "^2.20.1",
     "node-fetch": "^2.7.0"
   }
 }
