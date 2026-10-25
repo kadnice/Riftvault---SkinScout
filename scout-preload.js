@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('scoutAPI', {
   // Reuses RiftVault's existing "select-skin" handler in main.js
   equipSkin: (skinId) => ipcRenderer.invoke('select-skin', skinId),
   dismiss: () => ipcRenderer.send('scout-dismiss'),
+  openGuide: (championKey, role) => ipcRenderer.send('scout-open-guide', championKey, role),
   openMainWindow: () => ipcRenderer.send('scout-open-main'),
 });

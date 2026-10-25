@@ -73,6 +73,16 @@ const modalId = document.getElementById('modal-id');
 const wikiLink = document.getElementById('wiki-link');
 const modelLink = document.getElementById('model-link');
 const spotlightLink = document.getElementById('spotlight-link');
+const skillCappedLink = document.getElementById('skillcapped-link');
+let champSelectRole = ''; // your assigned role in the current champ select, if any
+
+// Skill Capped build guide address for a champion (+ role if known)
+const SKILL_CAPPED_ROLES = { top: 'top', jungle: 'jungle', middle: 'mid', bottom: 'adc', utility: 'support' };
+function skillCappedUrl(championKey, role) {
+    const slug = String(championKey || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const r = SKILL_CAPPED_ROLES[role] || '';
+    return `https://www.skill-capped.com/lol/guides/builds/${slug}${r ? '/' + r : ''}`;
+}
 
 // ─── VIDEO SPEED CONTROLS (for in-app web tabs) ───────────────────────────────
 // This text is a small program that gets run *inside* each web page a tab
@@ -118,10 +128,8 @@ const VIDEO_SPEED_SCRIPT = `
   }
 
   // Sites like YouTube reset the speed when a new video starts; put ours back
-  // (but leave YouTube ads alone, since the ad skipper below handles those)
   document.addEventListener('play', (e) => {
-    const inAd = e.target.closest && e.target.closest('.ad-showing');
-    if (e.target instanceof HTMLVideoElement && !inAd && e.target.playbackRate !== speed) {
+    if (e.target instanceof HTMLVideoElement && e.target.playbackRate !== speed) {
       e.target.playbackRate = speed;
     }
   }, true);
@@ -142,38 +150,6 @@ const VIDEO_SPEED_SCRIPT = `
     e.preventDefault();
     e.stopPropagation();
   }, true);
-
-  // ── YouTube ad skipper ──
-  // YouTube marks its player with the class "ad-showing" while an ad plays.
-  // When we see that: mute the ad, jump to its end, and press "Skip" if it's
-  // there. When the real video starts, we unmute it again.
-  if (/(^|\\.)youtube\\.com$/.test(location.hostname)) {
-    const hideAds = document.createElement('style');
-    hideAds.textContent =
-      '.ytp-ad-overlay-container, .ytp-ad-image-overlay, #masthead-ad, #player-ads,' +
-      'ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ytd-promoted-sparkles-web-renderer,' +
-      'ytd-banner-promo-renderer, ytd-statement-banner-renderer { display: none !important; }';
-    document.documentElement.appendChild(hideAds);
-
-    let mutedByUs = false;
-    setInterval(() => {
-      const player = document.querySelector('.html5-video-player');
-      const video = player && player.querySelector('video');
-      if (!video) return;
-      const adPlaying = player.classList.contains('ad-showing');
-      if (adPlaying) {
-        if (!video.muted) { video.muted = true; mutedByUs = true; }
-        if (isFinite(video.duration) && video.duration > 0) video.currentTime = video.duration;
-        const skip = document.querySelector(
-          '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');
-        if (skip) skip.click();
-      } else if (mutedByUs) {
-        video.muted = false; // ad is over: give the real video its sound back
-        mutedByUs = false;
-        if (video.playbackRate !== speed) video.playbackRate = speed;
-      }
-    }, 250);
-  }
 })();
 `;
 
@@ -1530,6 +1506,14 @@ function openModal(skin) {
         closeModal();
         TabManager.createTab(`https://modelviewer.lol/model-viewer?id=${skin.id}`, skin.name + ' 3D', '🎮');
     };
+    skillCappedLink.onclick = (e) => {
+        e.preventDefault();
+        closeModal();
+        // Use your champ-select role if this is the champion you're on right now
+        const role = champSelectChampId === skin.championId ? champSelectRole : '';
+        TabManager.createTab(skillCappedUrl(skin.championKey, role), skin.championName + ' Build', '📘');
+    };
+
     spotlightLink.onclick = (e) => {
         e.preventDefault();
         closeModal();
@@ -2052,7 +2036,12 @@ if (window.riftVaultAPI.onLiveGameEvent) {
         if (event.type === 'champ-hover' && event.championId) {
             scrollToChampion(event.championId);
         }
+        if (event.type === 'open-tab') {
+            TabManager.createTab(event.url, event.title, event.icon);
+            return;
+        }
         if (event.type === 'champ-select-state') {
+            champSelectRole = event.position || '';
             champSelectActive = event.active;
             champSelectChampId = event.championId || 0;
             champSelectSkinId = event.currentSkinId || 0;

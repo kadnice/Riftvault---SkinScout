@@ -37,6 +37,69 @@ try { layoutPref = localStorage.getItem('scoutLayout') || 'split'; } catch (e) {
 // (redrawing reloads images, which looks like flicker)
 const lastHtml = { list: '', strip: '', focus: '' };
 
+// ─── Build guide panel state ──────────────────────────────────────────────────
+// Large window: the guide panel sits to the right of the skins and stays
+// open/closed as you last left it. Small window: the guide temporarily takes
+// over the list, with a "← Skins" button to go back.
+const guideEl = document.getElementById('scout-guide');
+const guideView = document.getElementById('scout-guide-view');
+const guideTitle = document.getElementById('scout-guide-title');
+let guideOpenWide = false;
+try { guideOpenWide = localStorage.getItem('scoutGuideOpen') === '1'; } catch (e) { /* storage unavailable */ }
+let guideOpenNarrow = false;
+let guideUrl = '';          // page currently loaded in the guide panel
+let guideChamp = null;      // champion the guide is showing
+
+const GUIDE_ROLES = { top: 'top', jungle: 'jungle', middle: 'mid', bottom: 'adc', utility: 'support' };
+function skillCappedUrl(championKey, role) {
+  const slug = String(championKey || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const r = GUIDE_ROLES[role] || '';
+  return `https://www.skill-capped.com/lol/guides/builds/${slug}${r ? '/' + r : ''}`;
+}
+
+function guideVisible() {
+  return currentLayout() === 'narrow' ? guideOpenNarrow : guideOpenWide;
+}
+
+function setGuideOpen(open) {
+  if (currentLayout() === 'narrow') {
+    guideOpenNarrow = open;
+  } else {
+    guideOpenWide = open;
+    try { localStorage.setItem('scoutGuideOpen', open ? '1' : '0'); } catch (e) { /* not important */ }
+  }
+  lastHtml.focus = ''; // the "Build guide" button label changes
+  if (lastPayload) render(lastPayload);
+}
+
+/** Shows (and if needed loads) the guide for the selected champion */
+function updateGuide(champ) {
+  const visible = guideVisible() && !!champ;
+  document.body.classList.toggle('guide-open', visible);
+  if (!visible) return;
+  guideChamp = champ;
+  const role = (lastPayload && lastPayload.myRole) || '';
+  const url = skillCappedUrl(champ.key, role);
+  guideTitle.textContent = `${champ.name} build guide`;
+  if (url !== guideUrl) {
+    guideUrl = url;
+    guideView.setAttribute('src', url); // follows whichever champion you click
+  }
+}
+
+// Show the guide a little smaller so more of the page fits in the panel
+guideView.addEventListener('dom-ready', () => {
+  try { guideView.setZoomFactor(0.9); } catch (e) { /* not important */ }
+});
+
+document.getElementById('scout-guide-close').addEventListener('click', () => setGuideOpen(false));
+document.getElementById('scout-guide-back').addEventListener('click', () => setGuideOpen(false));
+document.getElementById('scout-guide-popout').addEventListener('click', () => {
+  // Open the same guide in a RiftVault tab instead, and close the panel
+  if (guideChamp) window.scoutAPI.openGuide(guideChamp.key, (lastPayload && lastPayload.myRole) || '');
+  setGuideOpen(false);
+});
+
 // ─── Small helpers ─────────────────────────────────────────────────────────────
 function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, c => ({
@@ -77,6 +140,8 @@ function applyLayout() {
   document.querySelectorAll('.scout-layout-toggle__btn').forEach(btn => {
     btn.classList.toggle('is-active', btn.dataset.layout === layoutPref);
   });
+  // Taller than wide (e.g. a vertical monitor): the guide stacks under the skins
+  document.body.classList.toggle('is-portrait', window.innerHeight > window.innerWidth);
   // (No CSS zoom here: zoom made Windows think the drag area was lower than the
   // title bar really is, so grabbing the top of the window didn't work.)
   currentScale = 1;
@@ -215,6 +280,7 @@ function rowHtml(champ, { selectedId, openIds, layout }) {
       <div class="scout-row__main">
         <img class="scout-row__icon" src="${escapeHtml(champ.iconUrl)}" alt="" />
         <div class="scout-row__name">${escapeHtml(champ.name)} ${tagsFor(champ)}</div>
+        <button class="scout-row__guide" data-guide="${escapeHtml(champ.key)}" data-id="${champ.id}" title="Skill Capped build guide"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg></button>
         <div class="scout-row__count" title="${champ.skinCount} owned skin${champ.skinCount === 1 ? '' : 's'}">${champ.skinCount}</div>
       </div>
       ${layout === 'narrow' ? `<div class="scout-row__skins">${smallSkinsHtml(champ)}</div>` : ''}
@@ -253,6 +319,11 @@ function focusHtml(champ) {
         <div class="focus-header__name">${escapeHtml(champ.name)} ${tagsFor(champ)}</div>
         <div class="focus-header__meta">${champ.skinCount} owned skin${champ.skinCount === 1 ? '' : 's'}${hint ? ` · ${hint}` : ''}</div>
       </div>
+      <button class="focus-guide${guideOpenWide ? ' is-active' : ''}" data-guide="${escapeHtml(champ.key)}" data-id="${champ.id}"
+        title="${guideOpenWide ? 'Hide the build guide' : 'Show the Skill Capped build guide next to your skins'}">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg>
+        ${guideOpenWide ? 'Hide guide' : 'Build guide'}
+      </button>
     </header>
     <div class="focus-cards">${cards}</div>`;
 }
@@ -271,6 +342,7 @@ function render(payload) {
     setHtml(listEl, 'list', message('Reading your collection from the League client. This takes a few seconds the first time.'));
     setHtml(stripEl, 'strip', '');
     setHtml(focusEl, 'focus', '');
+    document.body.classList.remove('guide-open');
     return;
   }
 
@@ -316,6 +388,9 @@ function render(payload) {
   if (layout !== 'narrow' && setHtml(focusEl, 'focus', focusHtml(selected))) fitFocusCards();
   if (layout === 'narrow') setHtml(focusEl, 'focus', '');
 
+  // Build guide panel follows the selected champion
+  updateGuide(selected);
+
   // Bring the selected champion into view when the client pick changes
   if (clientPickChanged && selectedId) {
     const row = listEl.querySelector(`.scout-row[data-id="${selectedId}"]`);
@@ -340,6 +415,18 @@ bodyEl.addEventListener('error', (e) => {
 }, true);
 
 bodyEl.addEventListener('click', async (e) => {
+  // "Build guide" buttons: open Skill Capped for that champion (and your role)
+  const guideBtn = e.target.closest('[data-guide]');
+  if (guideBtn) {
+    const isHeaderToggle = guideBtn.classList.contains('focus-guide');
+    if (isHeaderToggle) {
+      setGuideOpen(!guideOpenWide); // big view: show/hide the panel
+    } else {
+      userPickId = Number(guideBtn.dataset.id); // list row: guide for that champion
+      setGuideOpen(true);
+    }
+    return;
+  }
   // Equip a skin (small thumbnails or big cards)
   const skinEl = e.target.closest('.scout-skin.can-equip, .focus-card.can-equip');
   if (skinEl) {
@@ -379,5 +466,63 @@ listEl.addEventListener('mouseleave', () => {
   if (currentLayout() !== 'narrow') return;
   listEl.querySelectorAll('.scout-row.is-open:not(.is-hovered)').forEach(r => r.classList.remove('is-open'));
 });
+
+// ─── Moving the window ────────────────────────────────────────────────────────
+// Press on any empty part of the window and drag to move it. Things you click
+// (buttons, rows, skin cards, the search box, the guide page, scroll bars)
+// don't start a drag. You have to move 3 pixels first, so plain clicks and
+// double-clicks still work normally.
+const NOT_DRAGGABLE = 'button, input, a, textarea, select, webview, .scout-row, .focus-card,' +
+  '.scout-skin, .scout-strip__item, .scout-layout-toggle, .scout-guide__view, .resize-grip';
+let resizing = false;
+
+// Resize handles on the left, right and bottom edges. Listening on the whole
+// document (instead of on each handle) works no matter when the handles are
+// added to the page.
+document.addEventListener('pointerdown', (e) => {
+  const grip = e.button === 0 && e.target instanceof Element && e.target.closest('.resize-grip');
+  if (!grip) return;
+  e.preventDefault();
+  e.stopPropagation();
+  resizing = true;
+  try { grip.setPointerCapture(e.pointerId); } catch (err) { /* not important */ }
+  window.scoutAPI.windowAction('resize-start', grip.dataset.edge);
+}, true);
+let dragPending = null;
+let dragging = false;
+
+function onScrollbar(el, e) {
+  const r = el.getBoundingClientRect();
+  const vBar = el.scrollHeight > el.clientHeight && e.clientX > r.left + el.clientLeft + el.clientWidth;
+  const hBar = el.scrollWidth > el.clientWidth && e.clientY > r.top + el.clientTop + el.clientHeight;
+  return vBar || hBar;
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  const el = e.target instanceof Element ? e.target : e.target.parentElement;
+  if (!el || el.closest(NOT_DRAGGABLE) || onScrollbar(el, e)) return;
+  dragPending = { x: e.screenX, y: e.screenY, id: e.pointerId, el };
+});
+
+document.addEventListener('pointermove', (e) => {
+  if (!dragPending || dragging) return;
+  if (Math.abs(e.screenX - dragPending.x) + Math.abs(e.screenY - dragPending.y) < 3) return;
+  dragging = true;
+  try { dragPending.el.setPointerCapture(dragPending.id); } catch (err) { /* not important */ }
+  console.log('[Scout] Drag detected in window.');
+  window.scoutAPI.windowAction('drag-start');
+});
+
+function endDrag() {
+  if (dragging || resizing) window.scoutAPI.windowAction('drag-end'); // also ends resizing
+  dragging = false;
+  resizing = false;
+  dragPending = null;
+}
+document.addEventListener('pointerup', endDrag);
+document.addEventListener('pointercancel', endDrag);
+document.addEventListener('lostpointercapture', endDrag);
+window.addEventListener('blur', endDrag);
 
 window.scoutAPI.onUpdate(render);

@@ -67,7 +67,7 @@ function saveBoundsSoon() {
   saveTimer = setTimeout(() => {
     if (!scoutWindow || scoutWindow.isDestroyed()) return;
     // Only remember the normal size, not the maximized or minimized one
-    if (scoutWindow.isMaximized() || collapsedFromHeight !== null) return;
+    if (windowMode !== 'normal' || collapsedFromHeight !== null) return;
     try {
       fs.writeFileSync(BOUNDS_FILE(), JSON.stringify(scoutWindow.getBounds()));
     } catch (e) { /* not important */ }
@@ -80,9 +80,14 @@ function ensureWindow() {
   const b = readSavedBounds();
   scoutWindow = new BrowserWindow({
     x: b.x, y: b.y, width: b.width, height: b.height,
-    minWidth: 220, minHeight: 160,
     frame: false,
-    resizable: true,
+    // Not resizable by Windows: Electron 29 puts Windows' resize zone INSIDE
+    // the top of frameless windows, which kept catching attempts to drag the
+    // title bar. Skin Scout has its own resize handles instead (left, right,
+    // bottom and bottom corners — never the top). See RESIZING below.
+    resizable: false,
+    maximizable: false,   // never use Windows' real maximize (see WINDOW SIZE MODES)
+    fullscreenable: false,
     show: false,
     skipTaskbar: pinned,   // unpinned windows get a taskbar button so you can bring them back
     alwaysOnTop: pinned,
@@ -92,6 +97,7 @@ function ensureWindow() {
       preload: path.join(__dirname, 'scout-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true, // lets the window show the Skill Capped guide inside it
     },
   });
   // 'floating' keeps it above the League client window
@@ -101,8 +107,27 @@ function ensureWindow() {
 
   scoutWindow.on('move', saveBoundsSoon);
   scoutWindow.on('resize', saveBoundsSoon);
-  scoutWindow.on('maximize', sendWindowState);
-  scoutWindow.on('unmaximize', sendWindowState);
+  // Send the Skin Scout window's own errors and [Scout] messages to the
+  // terminal / riftvault.log (otherwise they'd only be in a hidden console)
+  scoutWindow.webContents.on('console-message', (...args) => {
+    const first = args[0];
+    const level = (first && first.level !== undefined) ? first.level : args[1];
+    const message = (first && typeof first.message === 'string') ? first.message : args[2];
+    const isError = level === 3 || level === 'error';
+    if (typeof message === 'string' && (isError || /^\[Scout/.test(message))) {
+      console.log(`[Scout window]${isError ? ' ERROR:' : ''} ${message}`);
+    }
+  });
+  // If Windows maximizes it anyway (e.g. Win+Up), switch to our fill mode
+  scoutWindow.on('maximize', () => {
+    const before = scoutWindow.getNormalBounds();
+    scoutWindow.unmaximize();
+    setTimeout(() => {
+      if (!scoutWindow || scoutWindow.isDestroyed()) return;
+      fillScreen();
+      normalBounds = before; // remember the size from before Windows maximized it
+    }, 50);
+  });
   scoutWindow.webContents.on('did-finish-load', () => {
     lastPayloadJson = ''; // force a fresh send after (re)load
     sendWindowState();
@@ -119,7 +144,7 @@ function ensureWindow() {
 function sendWindowState() {
   if (!scoutWindow || scoutWindow.isDestroyed()) return;
   scoutWindow.webContents.send('scout-window-state', {
-    maximized: scoutWindow.isMaximized(),
+    maximized: windowMode === 'filled', // drives the maximize/restore icon
     collapsed: collapsedFromHeight !== null,
     pinned,
   });
@@ -127,13 +152,181 @@ function sendWindowState() {
 
 function expandFromCollapsed() {
   const b = scoutWindow.getBounds();
-  scoutWindow.setMinimumSize(220, 160);
   scoutWindow.setBounds({ ...b, height: collapsedFromHeight });
   collapsedFromHeight = null;
 }
 
+// ─── WINDOW SIZE MODES ────────────────────────────────────────────────────────
+// Skin Scout never uses Windows' real "maximized" state: that state locks the
+// window in place and is slow to undo, which made dragging unreliable.
+// Instead:
+//   'normal'  – wherever and however big you made it
+//   'filled'  – resized to exactly cover the screen (above the taskbar), but
+//               still an ordinary window you can drag away
+//   'snapped' – resized to half or a quarter of the screen
+// normalBounds remembers your normal size/position so it can be restored.
+let windowMode = 'normal';
+let normalBounds = null;
+
+function workAreaFor(point) {
+  return screen.getDisplayNearestPoint(point).workArea;
+}
+
+function enterMode(mode, bounds) {
+  if (windowMode === 'normal') normalBounds = scoutWindow.getBounds();
+  windowMode = mode;
+  scoutWindow.setBounds(bounds);
+  sendWindowState();
+}
+
+function fillScreen() {
+  const b = scoutWindow.getBounds();
+  enterMode('filled', workAreaFor({ x: b.x + Math.round(b.width / 2), y: b.y + 20 }));
+}
+
+function restoreNormal() {
+  if (windowMode === 'normal') return;
+  windowMode = 'normal';
+  if (normalBounds) scoutWindow.setBounds(normalBounds);
+  sendWindowState();
+}
+
+// ─── SNAPPING ─────────────────────────────────────────────────────────────────
+// Let go of the window with the cursor at a screen edge:
+//   top edge → fill the screen   left/right edge → half   corner → quarter
+const SNAP_EDGE_PX = 12;
+function snapTarget(cursor) {
+  const area = workAreaFor(cursor);
+  const atLeft = cursor.x <= area.x + SNAP_EDGE_PX;
+  const atRight = cursor.x >= area.x + area.width - 1 - SNAP_EDGE_PX;
+  const atTop = cursor.y <= area.y + SNAP_EDGE_PX;
+  const atBottom = cursor.y >= area.y + area.height - 1 - SNAP_EDGE_PX;
+  const halfW = Math.round(area.width / 2);
+  const halfH = Math.round(area.height / 2);
+  const left = { x: area.x, width: halfW };
+  const right = { x: area.x + halfW, width: area.width - halfW };
+  const top = { y: area.y, height: halfH };
+  const bottom = { y: area.y + halfH, height: area.height - halfH };
+  if ((atLeft || atRight) && (atTop || atBottom)) {
+    return { name: 'quarter', mode: 'snapped', bounds: { ...(atLeft ? left : right), ...(atTop ? top : bottom) } };
+  }
+  if (atTop) return { name: 'full screen', mode: 'filled', bounds: { ...area } };
+  if (atLeft) return { name: 'left half', mode: 'snapped', bounds: { ...left, y: area.y, height: area.height } };
+  if (atRight) return { name: 'right half', mode: 'snapped', bounds: { ...right, y: area.y, height: area.height } };
+  return null;
+}
+
+// ─── DRAGGING ─────────────────────────────────────────────────────────────────
+// While you hold the mouse on empty space, the window follows the cursor.
+// 7 ms between moves ≈ 144 per second, matching a 144 Hz monitor.
+const DRAG_TICK_MS = 7;
+const DRAG_SAFETY_MS = 20000; // stop following after 20 s, just in case
+let dragTimer = null;
+let dragStartBounds = null; // where the window was when the drag began
+
+function stopDrag() {
+  if (!dragTimer) return;
+  clearInterval(dragTimer);
+  dragTimer = null;
+  if (!scoutWindow || scoutWindow.isDestroyed()) return;
+  const target = snapTarget(screen.getCursorScreenPoint());
+  if (target) {
+    console.log(`[Scout] Snapped to ${target.name}.`);
+    enterMode(target.mode, target.bounds);
+    // "Restore" brings it back to where it was before this drag, like Windows
+    if (dragStartBounds) normalBounds = dragStartBounds;
+  }
+}
+
+function startDrag() {
+  stopDrag();
+  console.log('[Scout] Window drag started.');
+  const startCursor = screen.getCursorScreenPoint();
+  const current = scoutWindow.getBounds();
+  let start = current;
+
+  if (windowMode !== 'normal' && normalBounds) {
+    // Dragging a filled or snapped window: go back to your normal size,
+    // keeping the spot you grabbed under the cursor (like Windows does)
+    const grabRatio = (startCursor.x - current.x) / Math.max(1, current.width);
+    start = {
+      x: Math.round(startCursor.x - normalBounds.width * grabRatio),
+      y: Math.max(current.y, startCursor.y - 20),
+      width: normalBounds.width,
+      height: normalBounds.height,
+    };
+    windowMode = 'normal';
+    scoutWindow.setBounds(start);
+    sendWindowState();
+  }
+
+  dragStartBounds = start;
+  const startedAt = Date.now();
+  dragTimer = setInterval(() => {
+    if (!scoutWindow || scoutWindow.isDestroyed() || Date.now() - startedAt > DRAG_SAFETY_MS) {
+      stopDrag();
+      return;
+    }
+    const c = screen.getCursorScreenPoint();
+    // Width/height stay fixed so moving between monitors with different
+    // scaling doesn't slowly change the window's size
+    scoutWindow.setBounds({
+      x: start.x + (c.x - startCursor.x),
+      y: start.y + (c.y - startCursor.y),
+      width: start.width,
+      height: start.height,
+    });
+  }, DRAG_TICK_MS);
+}
+
+// ─── RESIZING ─────────────────────────────────────────────────────────────────
+// Skin Scout's own resize handles. While you hold one, the window edge follows
+// the cursor (same 144 Hz rhythm as dragging). Electron still allows the app
+// itself to resize a "not resizable" window; only Windows' own handles are off.
+const MIN_WIDTH = 220;
+const MIN_HEIGHT = 160;
+let resizeTimer = null;
+
+function stopResize() {
+  if (resizeTimer) clearInterval(resizeTimer);
+  resizeTimer = null;
+}
+
+function startResize(edge) {
+  stopResize();
+  if (!['left', 'right', 'bottom', 'bottom-left', 'bottom-right'].includes(edge)) return;
+  const startCursor = screen.getCursorScreenPoint();
+  const start = scoutWindow.getBounds();
+  if (windowMode !== 'normal') { windowMode = 'normal'; sendWindowState(); } // resizing ends fill/snap
+  const startedAt = Date.now();
+  resizeTimer = setInterval(() => {
+    if (!scoutWindow || scoutWindow.isDestroyed() || Date.now() - startedAt > DRAG_SAFETY_MS) {
+      stopResize();
+      return;
+    }
+    const c = screen.getCursorScreenPoint();
+    const dx = c.x - startCursor.x;
+    const dy = c.y - startCursor.y;
+    const b = { ...start };
+    if (edge.includes('left')) {
+      b.width = Math.max(MIN_WIDTH, start.width - dx);
+      b.x = start.x + (start.width - b.width); // right edge stays put
+    }
+    if (edge.includes('right')) b.width = Math.max(MIN_WIDTH, start.width + dx);
+    // Height can't change while minimized to the title bar
+    if (edge.includes('bottom') && collapsedFromHeight === null) {
+      b.height = Math.max(MIN_HEIGHT, start.height + dy);
+    }
+    scoutWindow.setBounds(b);
+  }, DRAG_TICK_MS);
+}
+
 function windowAction(action, headerHeight) {
   if (!scoutWindow || scoutWindow.isDestroyed()) return;
+
+  if (action === 'drag-start') { startDrag(); return; }
+  if (action === 'drag-end') { stopDrag(); stopResize(); return; }
+  if (action === 'resize-start') { startResize(headerHeight); return; } // 2nd value = which edge
 
   if (action === 'pin') {
     pinned = !pinned;
@@ -144,19 +337,18 @@ function windowAction(action, headerHeight) {
 
   if (action === 'maximize') {
     if (collapsedFromHeight !== null) expandFromCollapsed();
-    if (scoutWindow.isMaximized()) scoutWindow.unmaximize();
-    else scoutWindow.maximize();
+    if (windowMode === 'filled') restoreNormal();
+    else fillScreen();
   }
 
   if (action === 'minimize') {
-    if (scoutWindow.isMaximized()) scoutWindow.unmaximize();
     if (collapsedFromHeight !== null) {
       expandFromCollapsed();
     } else {
+      if (windowMode !== 'normal') restoreNormal();
       const b = scoutWindow.getBounds();
       const h = Math.max(36, Math.ceil(headerHeight || 56));
       collapsedFromHeight = b.height;
-      scoutWindow.setMinimumSize(220, h);
       scoutWindow.setBounds({ ...b, height: h });
     }
   }
@@ -365,6 +557,7 @@ async function update(session, creds) {
 
   send({
     state: 'ready',
+    myRole: me.assignedPosition || '', // top/jungle/middle/bottom/utility ('' in ARAM)
     mode: isBenchMode ? 'bench' : 'draft',
     hoverId,
     champions,

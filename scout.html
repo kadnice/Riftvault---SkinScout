@@ -63,8 +63,25 @@
     <nav class="scout-strip" id="scout-strip"></nav>
     <!-- Champion list (the whole window when small, the left column in Split) -->
     <div class="scout-list" id="scout-list"></div>
-    <!-- Big view of one champion's skins (Split and Focus layouts) -->
-    <section class="scout-focus" id="scout-focus"></section>
+    <div class="scout-main">
+      <!-- Big view of one champion's skins (Split and Focus layouts) -->
+      <section class="scout-focus" id="scout-focus"></section>
+      <!-- Skill Capped build guide, shown inside Skin Scout -->
+      <section class="scout-guide" id="scout-guide">
+        <header class="scout-guide__bar">
+          <button class="scout-guide__back" id="scout-guide-back" title="Back to skins">&#8592; Skins</button>
+          <div class="scout-guide__title" id="scout-guide-title">Build guide</div>
+          <button class="scout-guide__btn" id="scout-guide-popout" title="Open in a RiftVault tab instead">
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+              <path d="M9 2h5v5M14 2 7.5 8.5M12 9.5V13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3.5"
+                fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button class="scout-guide__btn" id="scout-guide-close" title="Close the guide">&#215;</button>
+        </header>
+        <webview class="scout-guide__view" id="scout-guide-view" src="about:blank"></webview>
+      </section>
+    </div>
   </main>
 
   <footer class="scout-footer">
@@ -78,6 +95,12 @@
     <span class="scout-footer__hint" id="scout-open-main">Open full collection</span>
   </footer>
 
+  <!-- Skin Scout's own resize handles (no top handle, so the top is always for moving) -->
+  <div class="resize-grip resize-grip--left" data-edge="left"></div>
+  <div class="resize-grip resize-grip--right" data-edge="right"></div>
+  <div class="resize-grip resize-grip--bottom" data-edge="bottom"></div>
+  <div class="resize-grip resize-grip--bottom-left" data-edge="bottom-left"></div>
+  <div class="resize-grip resize-grip--bottom-right" data-edge="bottom-right"></div>
   <script src="scout.js"></script>
 </body>
 

@@ -632,6 +632,16 @@ function createWindow() {
     },
   });
   ipcMain.on('scout-dismiss', () => scout.dismiss());
+  // Skin Scout's "Build guide" button: open Skill Capped in a RiftVault tab
+  ipcMain.on('scout-open-guide', (event, championKey, role) => {
+    const url = skillCappedUrl(championKey, role);
+    if (!url) return;
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('live-game-event', {
+      type: 'open-tab', url, title: `${championKey} Build`, icon: '📘',
+    });
+  });
   ipcMain.on('scout-window', (event, action, headerHeight) => scout.windowAction(action, headerHeight));
   ipcMain.on('scout-open-main', () => { mainWindow.show(); mainWindow.focus(); });
 
@@ -835,6 +845,19 @@ let lastHoveredChampId = null;
 let lastChampSelectActive = false;
 let lastLockedIn = false;
 
+// ─── SKILL CAPPED BUILD GUIDES ────────────────────────────────────────────────
+// Their pages live at skill-capped.com/lol/guides/builds/<champion>/<role>.
+// <champion> is Riot's internal champion name in lowercase (MasterYi → masteryi,
+// MonkeyKing → monkeyking for Wukong). Without a role, the site picks the
+// champion's main role.
+const SKILL_CAPPED_ROLES = { top: 'top', jungle: 'jungle', middle: 'mid', mid: 'mid', bottom: 'adc', adc: 'adc', utility: 'support', support: 'support' };
+function skillCappedUrl(championKey, role) {
+  const slug = String(championKey || '').toLowerCase();
+  if (!/^[a-z0-9]+$/.test(slug)) return null;
+  const r = SKILL_CAPPED_ROLES[String(role || '').toLowerCase()];
+  return `https://www.skill-capped.com/lol/guides/builds/${slug}${r ? '/' + r : ''}`;
+}
+
 // ─── HIDE TO TRAY WHEN A GAME STARTS ──────────────────────────────────────────
 // The League client reports a "gameflow phase": Lobby, ChampSelect, InProgress
 // (you're in the game), EndOfGame, and so on. When it switches to InProgress,
@@ -914,6 +937,7 @@ function startChampSelectPolling() {
             active: isLockedIn,
             championId: champId || 0,
             currentSkinId: localPlayer.selectedSkinId || 0,
+            position: localPlayer.assignedPosition || '', // top/jungle/middle/bottom/utility
           });
           // (The original app popped the main window up when you locked in.
           // Skin Scout can equip skins now, so that pop-up was turned off to
