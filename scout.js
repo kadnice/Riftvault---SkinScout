@@ -269,8 +269,23 @@ function smallSkinsHtml(champ) {
   }).join('');
 }
 
+// ARAM groups: which color/section a champion belongs to
+function groupOf(champ) {
+  if (champ.isMine) return 'you';
+  if (champ.onBench) return 'bench';
+  if (champ.onTeam) return 'team';
+  return '';
+}
+
+const ARAM_SECTIONS = [
+  { group: 'you', label: 'Your champion' },
+  { group: 'bench', label: 'Bench · swap anytime' },
+  { group: 'team', label: 'Teammates · trade to get' },
+];
+
 function rowHtml(champ, { selectedId, openIds, layout }) {
   const cls = ['scout-row'];
+  if (groupOf(champ)) cls.push(`is-${groupOf(champ)}`);
   const isSelected = champ.id === selectedId;
   if (isSelected) cls.push('is-hovered');
   // Only the small layout opens rows in place; the large layouts show skins in the big panel
@@ -289,7 +304,7 @@ function rowHtml(champ, { selectedId, openIds, layout }) {
 
 function stripHtml(champs, selectedId) {
   return champs.map(c => `
-    <button class="scout-strip__item${c.id === selectedId ? ' is-selected' : ''}" data-id="${c.id}" title="${escapeHtml(c.name)}">
+    <button class="scout-strip__item${c.id === selectedId ? ' is-selected' : ''}${groupOf(c) ? ` is-${groupOf(c)}` : ''}" data-id="${c.id}" title="${escapeHtml(c.name)}">
       <img src="${escapeHtml(c.iconUrl)}" alt="" />
       <span class="scout-strip__count">${c.skinCount}</span>
     </button>`).join('');
@@ -347,6 +362,8 @@ function render(payload) {
   }
 
   const { champions, availableCount, mode, hoverId } = payload;
+  // ARAM gets bigger portraits/names and color-coded groups (see scout.css)
+  document.body.classList.toggle('mode-aram', mode === 'bench');
   if (mode === 'preview') subEl.textContent = `Preview · ${champions.length} champs with skins`;
   else if (mode === 'bench') subEl.textContent = `ARAM · ${champions.length} of ${availableCount} available have skins`;
   else subEl.textContent = `${champions.length} of ${availableCount} pickable have skins`;
@@ -376,13 +393,26 @@ function render(payload) {
   } else {
     const openIds = new Set([...listEl.querySelectorAll('.scout-row.is-open:not(.is-hovered)')]
       .map(r => Number(r.dataset.id)));
-    listHtml = shown.map(c => rowHtml(c, { selectedId, openIds, layout })).join('');
+    const row = c => rowHtml(c, { selectedId, openIds, layout });
+    if (mode === 'bench') {
+      // ARAM: separate labeled sections for you, the bench and your teammates
+      listHtml = ARAM_SECTIONS.map(({ group, label }) => {
+        const champs = shown.filter(c => groupOf(c) === group);
+        if (!champs.length) return '';
+        return `<div class="scout-section scout-section--${group}">${label}</div>` + champs.map(row).join('');
+      }).join('');
+    } else {
+      listHtml = shown.map(row).join('');
+    }
   }
   const scrollTop = listEl.scrollTop;
   if (setHtml(listEl, 'list', layout === 'focus' ? '' : listHtml)) listEl.scrollTop = scrollTop;
 
   // Icon strip (Focus)
-  setHtml(stripEl, 'strip', layout === 'focus' ? stripHtml(shown, selectedId) : '');
+  const stripOrder = mode === 'bench'
+    ? ['you', 'bench', 'team'].flatMap(g => shown.filter(c => groupOf(c) === g))
+    : shown;
+  setHtml(stripEl, 'strip', layout === 'focus' ? stripHtml(stripOrder, selectedId) : '');
 
   // Big view (Split + Focus)
   if (layout !== 'narrow' && setHtml(focusEl, 'focus', focusHtml(selected))) fitFocusCards();

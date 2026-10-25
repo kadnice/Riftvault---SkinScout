@@ -770,6 +770,16 @@ app.on('before-quit', () => {
 // downloads the latest lists once, saves a copy in RiftVault's data folder so
 // later startups are instant, and refreshes them when that copy is a week old.
 // If the library isn't installed, RiftVault simply runs without ad blocking.
+// YouTube tabs (Skin Spotlights) get their own browsing session with only
+// network-level blocking. The full page-cleanup mode injects scripts into the
+// page, and on YouTube those scripts broke the video player (blank white video).
+const VIDEO_PARTITION = 'persist:video';
+
+function enableNetworkBlocking(ses, blocker) {
+  ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, cb) => blocker.onBeforeRequest(details, cb));
+  ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, cb) => blocker.onHeadersReceived(details, cb));
+}
+
 async function enableAdBlocking() {
   let ElectronBlocker;
   try {
@@ -789,24 +799,127 @@ async function enableAdBlocking() {
       read: fs.promises.readFile,
       write: fs.promises.writeFile,
     });
-    // The in-app tabs use the default session, so this covers all of them
-    try {
-      // Full blocking: stops ad downloads AND hides leftover ad boxes on pages.
-      // Newer versions of the library need Electron 35+ for the "hiding" part.
-      blocker.enableBlockingInSession(session.defaultSession);
-      console.log('[AdBlock] Ad blocking is on for in-app tabs.');
-    } catch (fullModeError) {
-      // Fallback: network blocking only. Ads are still stopped from loading;
-      // a page may just show an empty space where an ad would have been.
-      const ses = session.defaultSession;
-      ses.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, cb) => blocker.onBeforeRequest(details, cb));
-      ses.webRequest.onHeadersReceived({ urls: ['<all_urls>'] }, (details, cb) => blocker.onHeadersReceived(details, cb));
-      console.log('[AdBlock] Ad blocking is on for in-app tabs (network mode: this Electron version is too old for page-cleanup mode).');
-    }
+    // Network blocking only: ads are stopped from downloading, but nothing is
+    // injected into the pages themselves. (The library's full "page cleanup"
+    // mode, blocker.enableBlockingInSession, injects scripts into every page;
+    // after the Electron 45 upgrade that broke YouTube players — including
+    // videos opened from Khada — and filled the log with script errors.)
+    enableNetworkBlocking(session.defaultSession, blocker);
+    enableNetworkBlocking(session.fromPartition(VIDEO_PARTITION), blocker);
+    console.log('[AdBlock] Ad blocking is on for in-app tabs (network mode).');
   } catch (e) {
     console.warn('[AdBlock] Could not start ad blocking:', e.message);
   }
 }
+
+// ─── YOUTUBE LINKS FROM OTHER SITES ───────────────────────────────────────────
+// Pages like Khada have their own "Spotlight" buttons that show YouTube inside
+// their tab. Those tabs use full ad blocking, which breaks YouTube's player, so
+// any YouTube page or embedded video opened from them is sent to a new
+// YouTube-safe tab instead (the same kind RiftVault's own Spotlight link opens).
+function isYouTubeUrl(url) {
+  try {
+    return /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/.test(new URL(url).hostname);
+  } catch (e) { return false; }
+}
+
+function toWatchUrl(url) {
+  // Embedded players (/embed/VIDEO_ID) become normal watch pages
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/^\/embed\/([\w-]{6,})/);
+    if (m) return `https://www.youtube.com/watch?v=${m[1]}`;
+    if (u.hostname === 'youtu.be') return `https://www.youtube.com/watch?v=${u.pathname.slice(1)}`;
+  } catch (e) { /* keep as is */ }
+  return url;
+}
+
+function openVideoTab(url, title = 'Spotlight') {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  console.log(`[App] Opening YouTube in a video-safe tab: ${url}`);
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send('live-game-event', {
+    type: 'open-tab', url: toWatchUrl(url), title, icon: '📺',
+  });
+}
+
+// Khada's own Spotlight button opens modelviewer.lol/spotlight?id=<skin ID>,
+// a Khada page with the YouTube video embedded (and YouTube's ads with it).
+// Instead, open the same Skin Spotlights page RiftVault's own Spotlight link
+// uses, which plays without that problem. Returns true if handled.
+function openKhadaSpotlight(url) {
+  let u;
+  try { u = new URL(url); } catch (e) { return false; }
+  if (!/(^|\.)modelviewer\.lol$/.test(u.hostname) || !u.pathname.startsWith('/spotlight')) return false;
+  const id = Number(u.searchParams.get('id'));
+  const data = cachedData || scoutDiskCache;
+  const skin = data && Array.isArray(data.skins) ? data.skins.find(s => s.id === id) : null;
+  if (!skin) return false; // unknown skin: fall back to opening Khada's page
+  const query = encodeURIComponent(`${skin.name} Spotlight`).replace(/%20/g, '+');
+  console.log(`[App] Khada Spotlight for ${skin.name} (${id}) -> Skin Spotlights channel`);
+  openVideoTab(`https://www.youtube.com/@SkinSpotlights/search?app=desktop&query=${query}`, `${skin.name} Spotlight`);
+  return true;
+}
+
+function openLinkTab(url) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  console.log(`[App] Opening link in a RiftVault tab: ${url}`);
+  let title = 'Link';
+  try { title = new URL(url).hostname.replace(/^www\./, ''); } catch (e) { /* keep default */ }
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send('live-game-event', { type: 'open-tab', url, title, icon: '🌐' });
+}
+
+app.on('web-contents-created', (event, contents) => {
+  if (contents.getType() !== 'webview') return;
+  const videoSession = session.fromPartition(VIDEO_PARTITION);
+  if (contents.session === videoSession) return; // already a YouTube-safe tab
+
+  // Links that would open a separate window open as a RiftVault tab instead
+  // (YouTube links get a YouTube-safe tab automatically)
+  contents.setWindowOpenHandler(({ url }) => {
+    if (openKhadaSpotlight(url)) {
+      // handled: opened the Skin Spotlights page instead
+    } else if (isYouTubeUrl(url)) {
+      openVideoTab(url);
+    } else if (/^https?:/.test(url)) {
+      openLinkTab(url);
+    }
+    return { action: 'deny' };
+  });
+  // The page itself navigating to YouTube
+  contents.on('will-navigate', (e, url) => {
+    if (isYouTubeUrl(url)) {
+      e.preventDefault();
+      openVideoTab(url);
+    } else if (openKhadaSpotlight(url)) {
+      e.preventDefault(); // Khada page going to its spotlight page in the same tab
+    }
+  });
+  // A YouTube video embedded inside the page (an iframe)
+  // Only on Khada, where the video appears because you clicked Spotlight;
+  // other sites (e.g. Skill Capped) may embed videos on page load.
+  contents.on('will-frame-navigate', (details) => {
+    if (details.isMainFrame || !isYouTubeUrl(details.url)) return;
+    let pageHost = '';
+    try { pageHost = new URL(contents.getURL()).hostname; } catch (e) { /* ignore */ }
+    if (!/(^|\.)modelviewer\.lol$/.test(pageHost)) return;
+    details.preventDefault();
+    openVideoTab(details.url);
+  });
+});
+
+// Background promise errors (e.g. the ad blocker's page scripts failing on a
+// site) used to print a wall of warnings. Log each distinct one once, briefly.
+const seenBackgroundErrors = new Set();
+process.on('unhandledRejection', (reason) => {
+  const msg = (reason && reason.message) || String(reason);
+  if (seenBackgroundErrors.has(msg)) return;
+  seenBackgroundErrors.add(msg);
+  console.log(`[App] Background error (shown once): ${msg}`);
+});
 
 // ─── ONE COPY AT A TIME ───────────────────────────────────────────────────────
 // Closing the window only hides RiftVault in the tray, so it's easy to start a

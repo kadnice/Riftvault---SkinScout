@@ -194,7 +194,12 @@ const TabManager = {
         const pane = document.createElement('div');
         pane.className = 'tab-pane-webview';
         pane.id = `pane-${id}`;
-        pane.innerHTML = `<webview src="${url}" style="width:100%;height:100%;" allowpopups></webview>`;
+        // YouTube tabs use their own session with network-only ad blocking,
+        // because the full ad-block mode broke YouTube's video player
+        let isYouTube = false;
+        try { isYouTube = /(^|\.)youtube\.com$/.test(new URL(url).hostname); } catch (e) { /* not a URL */ }
+        const partition = isYouTube ? ' partition="persist:video"' : '';
+        pane.innerHTML = `<webview src="${url}" style="width:100%;height:100%;"${partition} allowpopups></webview>`;
         document.getElementById('webview-container').appendChild(pane);
 
         // Video speed controls (S = slower, D = faster, R = reset), added to

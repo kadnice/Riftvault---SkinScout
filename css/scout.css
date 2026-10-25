@@ -21,6 +21,8 @@
   --text: #a09b8c;
   --text-bright: #f0e6d2;
   --teal: #0ac8b9;
+  --bench-green: #3ecf7f; /* ARAM bench */
+  --team-blue: #4a9dff;   /* ARAM teammates (League's ally blue) */
   --r-transcendent: #2ec4f6;
   --r-ultimate: #ef4a60;
   --r-mythic: #ee4fa0;
@@ -431,8 +433,8 @@ body.layout-focus .scout-strip {
 }
 
 .scout-tag--bench {
-  border: 1px solid var(--teal);
-  color: var(--teal);
+  background: var(--bench-green);
+  color: #06210f;
 }
 
 /* ─── Skin thumbnails (hidden until the row opens) ─── */
@@ -503,8 +505,8 @@ body.layout-focus .scout-strip {
 .scout-skin--epic { border-top-color: var(--r-epic); }
 
 .scout-tag--team {
-  border: 1px solid var(--text);
-  color: var(--text-bright);
+  background: var(--team-blue);
+  color: #04152b;
 }
 
 /* ─── Icon strip (Focus layout) ─── */
@@ -891,4 +893,90 @@ body.is-collapsed .resize-grip {
 /* Keep the list's scroll bar clear of the right-edge handle */
 body.layout-narrow .scout-list {
   margin-right: 5px;
+}
+
+/* ─── ARAM: bigger rows + color-coded groups ───
+   Gold = your champion, green = bench (swap anytime), blue = teammates (trade). */
+.scout-section {
+  margin: 6px 2px 0;
+  padding: 2px 4px 3px;
+  font: 700 11px 'Inter', sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid currentColor;
+}
+
+.scout-section:first-child { margin-top: 0; }
+.scout-section--you { color: var(--gold); }
+.scout-section--bench { color: var(--bench-green); }
+.scout-section--team { color: var(--team-blue); }
+
+/* Colored stripe down the left edge of each row */
+.scout-row.is-you { box-shadow: inset 4px 0 0 var(--gold); }
+.scout-row.is-bench { box-shadow: inset 4px 0 0 var(--bench-green); }
+.scout-row.is-team { box-shadow: inset 4px 0 0 var(--team-blue); }
+
+.scout-row.is-you.is-hovered { box-shadow: inset 4px 0 0 var(--gold), 0 0 12px rgba(200, 155, 60, 0.25); }
+.scout-row.is-bench.is-hovered { box-shadow: inset 4px 0 0 var(--bench-green), 0 0 12px rgba(62, 207, 127, 0.25); }
+.scout-row.is-team.is-hovered { box-shadow: inset 4px 0 0 var(--team-blue), 0 0 12px rgba(74, 157, 255, 0.25); }
+
+/* Bigger portraits, names and counts in ARAM */
+body.mode-aram .scout-row__main {
+  gap: 12px;
+  padding: 7px 10px 7px 10px;
+}
+
+body.mode-aram .scout-row__icon {
+  width: 52px;
+  height: 52px;
+}
+
+body.mode-aram .scout-row__name {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+body.mode-aram .scout-row__count {
+  min-width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 30px;
+}
+
+body.mode-aram .scout-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  vertical-align: 3px;
+}
+
+body.mode-aram .focus-header__icon {
+  width: 76px;
+  height: 76px;
+}
+
+body.mode-aram .focus-header__name {
+  font-size: 32px;
+}
+
+/* Focus layout icon strip: bigger icons with a colored bar underneath */
+body.mode-aram .scout-strip__item {
+  width: 58px;
+  height: 58px;
+}
+
+.scout-strip__item.is-you { border-bottom: 3px solid var(--gold); }
+.scout-strip__item.is-bench { border-bottom: 3px solid var(--bench-green); }
+.scout-strip__item.is-team { border-bottom: 3px solid var(--team-blue); }
+
+/* In ARAM lists the section headers + colored stripes already show the group,
+   so the BENCH/TEAM labels are hidden there (they still show in the big view).
+   This leaves room for the bigger champion names. */
+body.mode-aram .scout-row .scout-tag--bench,
+body.mode-aram .scout-row .scout-tag--team {
+  display: none;
+}
+
+body.mode-aram.layout-split .scout-list {
+  flex-basis: 300px;
 }
