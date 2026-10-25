@@ -3,6 +3,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const scout = require('./scout-main');
+let scoutDiskCache = null;
 
 // ─── LCU LOCKFILE READER ───────────────────────────────────────────────────────
 
@@ -511,6 +513,7 @@ function createWindow() {
   tray.setToolTip('RiftVault');
   const trayMenu = Menu.buildFromTemplate([
     { label: 'Show RiftVault', click: () => { mainWindow.show(); mainWindow.focus(); } },
+    { id: 'scout-preview', label: 'Preview Skin Scout', type: 'checkbox', checked: false, click: (item) => { item.checked = scout.togglePreview(); } },
     { type: 'separator' },
     { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
   ]);
@@ -533,6 +536,30 @@ function createWindow() {
       }
     }
   });
+
+  // ─── SKIN SCOUT ─────────────────────────────────────────────────────────────
+  scout.init({
+    lcuRequest,
+    getSkinData: () => {
+      if (cachedData) return cachedData;
+      // Fall back to the on-disk cache (read once, not on every poll)
+      if (scoutDiskCache) return scoutDiskCache;
+      try {
+        const cachePath = path.join(app.getPath('userData'), 'skin-cache.json');
+        if (fs.existsSync(cachePath)) scoutDiskCache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+      } catch (e) { /* fall through to a live load */ }
+      return scoutDiskCache;
+    },
+    loadSkinData: () => fetchSkinsData(),
+    // Untick the tray checkbox when a real champ select turns preview off
+    onPreviewChange: (on) => {
+      const item = trayMenu.getMenuItemById('scout-preview');
+      if (item) item.checked = on;
+    },
+  });
+  ipcMain.on('scout-dismiss', () => scout.dismiss());
+  ipcMain.on('scout-window', (event, action, headerHeight) => scout.windowAction(action, headerHeight));
+  ipcMain.on('scout-open-main', () => { mainWindow.show(); mainWindow.focus(); });
 
   startChampSelectPolling();
 
@@ -650,6 +677,7 @@ ipcMain.handle('save-share-card', async (event, byteArray, suggestedName) => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  scout.destroy();
   if (tray) { tray.destroy(); tray = null; }
 });
 
@@ -712,10 +740,12 @@ function startChampSelectPolling() {
           }
           lastLockedIn = isLockedIn;
           lastChampSelectActive = true;
+          scout.update(session, creds).catch(e => console.warn('[Scout]', e.message));
           nextDelay = 500; // faster polling during champ select
         }
       } else {
         lastHoveredChampId = null;
+        scout.clear();
         if (lastChampSelectActive) {
           mainWindow.webContents.send('live-game-event', {
             type: 'champ-select-state',
@@ -729,6 +759,7 @@ function startChampSelectPolling() {
       }
     } catch (e) {
       lastHoveredChampId = null;
+      scout.clear();
       if (lastChampSelectActive) {
         mainWindow.webContents.send('live-game-event', {
           type: 'champ-select-state',
