@@ -14,9 +14,32 @@
   <header class="scout-header">
     <div class="scout-header__text">
       <div class="scout-header__title">Skin Scout</div>
-      <div class="scout-header__sub" id="scout-sub">Waiting for champ select…</div>
+      <div class="scout-header__sub" id="scout-sub">Waiting for champ select...</div>
     </div>
     <div class="scout-header__buttons">
+      <!-- Layout switch: only shown when the window is large -->
+      <div class="scout-layout-toggle" id="scout-layout-toggle">
+        <button class="scout-layout-toggle__btn" data-layout="split" title="Split: list + big skins">
+          <svg viewBox="0 0 16 12" width="16" height="12" aria-hidden="true">
+            <rect x="0.75" y="0.75" width="4.5" height="10.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3" />
+            <rect x="7" y="0.75" width="8.25" height="10.5" rx="1" fill="currentColor" opacity="0.85" />
+          </svg>
+          Split
+        </button>
+        <button class="scout-layout-toggle__btn" data-layout="focus" title="Focus: big skins only">
+          <svg viewBox="0 0 16 12" width="16" height="12" aria-hidden="true">
+            <rect x="0.75" y="0.75" width="14.5" height="2.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2" />
+            <rect x="0.75" y="4.5" width="14.5" height="6.75" rx="1" fill="currentColor" opacity="0.85" />
+          </svg>
+          Focus
+        </button>
+      </div>
+      <button class="scout-header__btn scout-header__btn--pin" id="scout-pin" title="Pin on top">
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+          <path d="M6 1.5h4l-.6 4.2 2.6 2.3v1.5H8.75V14L8 15l-.75-1V9.5H4V8l2.6-2.3z"
+            fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+        </svg>
+      </button>
       <button class="scout-header__btn" id="scout-min" title="Minimize">
         <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">
           <line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.4" />
@@ -35,7 +58,14 @@
     </div>
   </header>
 
-  <main class="scout-list" id="scout-list"></main>
+  <main class="scout-body" id="scout-body">
+    <!-- Focus layout: a row of champion icons to switch between -->
+    <nav class="scout-strip" id="scout-strip"></nav>
+    <!-- Champion list (the whole window when small, the left column in Split) -->
+    <div class="scout-list" id="scout-list"></div>
+    <!-- Big view of one champion's skins (Split and Focus layouts) -->
+    <section class="scout-focus" id="scout-focus"></section>
+  </main>
 
   <footer class="scout-footer">
     <button class="scout-footer__search-btn" id="scout-search-btn" title="Search champions">
@@ -44,7 +74,7 @@
         <line x1="10" y1="10" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
       </svg>
     </button>
-    <input class="scout-footer__input" id="scout-search" type="text" placeholder="Search champions…" spellcheck="false" />
+    <input class="scout-footer__input" id="scout-search" type="text" placeholder="Search champions..." spellcheck="false" />
     <span class="scout-footer__hint" id="scout-open-main">Open full collection</span>
   </footer>
 

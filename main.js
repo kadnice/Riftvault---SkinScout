@@ -2,9 +2,10 @@ const { app, BrowserWindow, ipcMain, dialog, screen, shell, Tray, Menu, session 
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { exec } = require('child_process');
 const scout = require('./scout-main');
 let scoutDiskCache = null;
+let mainWindow = null; // the main RiftVault window (created in createWindow)
 
 // ─── LCU LOCKFILE READER ───────────────────────────────────────────────────────
 
@@ -39,109 +40,102 @@ function parseLockfile(filePath) {
   }
 }
 
-/** Use PowerShell to get the running LeagueClientUx.exe path, then derive lockfile location */
-function findLockfileViaPowerShell() {
-  // Strategy 1: Get exe path from Get-Process (works even without admin)
-  try {
-    const exePath = execSync(
-      `powershell -NoProfile -NonInteractive -Command "` +
-      `(Get-Process -Name 'LeagueClientUx' -ErrorAction SilentlyContinue | Select-Object -First 1).Path"`,
-      { encoding: 'utf8', timeout: 8000 }
-    ).trim();
+// Run a command in the background without freezing the app (and without
+// flashing a console window on screen)
+function runHidden(command, timeoutMs) {
+  return new Promise((resolve) => {
+    exec(command, { encoding: 'utf8', timeout: timeoutMs, windowsHide: true }, (err, stdout) => {
+      resolve(err ? '' : String(stdout || '').trim());
+    });
+  });
+}
 
-    if (exePath && fs.existsSync(exePath)) {
-      const installDir = path.dirname(exePath);
-      const lockfilePath = path.join(installDir, 'lockfile');
+function credsFromCommandLine(cmdLine) {
+  const portMatch = cmdLine.match(/--app-port=(\d+)/);
+  const tokenMatch = cmdLine.match(/--remoting-auth-token=([\w-]+)/);
+  if (!portMatch || !tokenMatch) return null;
+  return { name: 'LeagueClientUx', pid: 0, port: parseInt(portMatch[1]), password: tokenMatch[1], protocol: 'https' };
+}
+
+/**
+ * Slow path: ask Windows where the running League client is. Only used when
+ * the lockfile isn't in any of the usual folders. Runs in the background.
+ */
+async function findLockfileViaPowerShell() {
+  // Strategy 1: the running client's .exe location → lockfile sits next to it
+  const exePath = await runHidden(
+    'powershell -NoProfile -NonInteractive -Command "' +
+    '(Get-Process -Name \'LeagueClientUx\' -ErrorAction SilentlyContinue | Select-Object -First 1).Path"',
+    8000);
+  if (exePath && fs.existsSync(exePath)) {
+    const lockfilePath = path.join(path.dirname(exePath), 'lockfile');
+    if (fs.existsSync(lockfilePath)) {
+      console.log('[LCU] Found lockfile via the running client:', lockfilePath);
+      knownLockfilePath = lockfilePath; // remember it for next time
+      return parseLockfile(lockfilePath);
+    }
+  }
+
+  // Strategy 2: the client's launch command contains the port and password
+  const cmdLine = await runHidden(
+    'powershell -NoProfile -NonInteractive -Command "' +
+    '(Get-CimInstance Win32_Process -Filter \\"name=\'LeagueClientUx.exe\'\\" | Select-Object -First 1).CommandLine"',
+    8000);
+  if (cmdLine) {
+    const creds = credsFromCommandLine(cmdLine);
+    if (creds) {
+      console.log('[LCU] Got credentials from the client\'s launch command');
+      return creds;
+    }
+    const dirMatch = cmdLine.match(/--install-directory=([^\s"]+)/);
+    if (dirMatch) {
+      const lockfilePath = path.join(dirMatch[1].replace(/"/g, ''), 'lockfile');
       if (fs.existsSync(lockfilePath)) {
-        console.log('[LCU] Found lockfile via PowerShell Get-Process:', lockfilePath);
+        knownLockfilePath = lockfilePath;
         return parseLockfile(lockfilePath);
       }
     }
-  } catch (e) {
-    console.warn('[LCU] PowerShell Get-Process failed:', e.message);
   }
-
-  // Strategy 2: WMI via PowerShell (Get-WmiObject — more reliable than wmic)
-  try {
-    const cmdLine = execSync(
-      `powershell -NoProfile -NonInteractive -Command "` +
-      `(Get-WmiObject Win32_Process -Filter 'name=\\"LeagueClientUx.exe\\"' | Select-Object -First 1).CommandLine"`,
-      { encoding: 'utf8', timeout: 8000 }
-    ).trim();
-
-    if (cmdLine) {
-      // Parse --app-port and --remoting-auth-token directly from command line
-      const portMatch = cmdLine.match(/--app-port=(\d+)/);
-      const tokenMatch = cmdLine.match(/--remoting-auth-token=([\w-]+)/);
-      if (portMatch && tokenMatch) {
-        console.log('[LCU] Got credentials from WMI command line');
-        return {
-          name: 'LeagueClientUx',
-          pid: 0,
-          port: parseInt(portMatch[1]),
-          password: tokenMatch[1],
-          protocol: 'https',
-        };
-      }
-      // Parse install directory
-      const dirMatch = cmdLine.match(/--install-directory=([^\s"]+)/);
-      if (dirMatch) {
-        const lockfilePath = path.join(dirMatch[1].replace(/"/g, ''), 'lockfile');
-        if (fs.existsSync(lockfilePath)) return parseLockfile(lockfilePath);
-      }
-    }
-  } catch (e) {
-    console.warn('[LCU] PowerShell WMI failed:', e.message);
-  }
-
-  // Strategy 3: Legacy wmic
-  try {
-    const output = execSync(
-      'wmic PROCESS WHERE "name=\'LeagueClientUx.exe\'" GET commandline /FORMAT:csv',
-      { encoding: 'utf8', timeout: 5000, shell: true }
-    );
-    const portMatch = output.match(/--app-port=(\d+)/);
-    const tokenMatch = output.match(/--remoting-auth-token=([\w-]+)/);
-    if (portMatch && tokenMatch) {
-      console.log('[LCU] Got credentials from wmic');
-      return {
-        name: 'LeagueClientUx',
-        pid: 0,
-        port: parseInt(portMatch[1]),
-        password: tokenMatch[1],
-        protocol: 'https',
-      };
-    }
-  } catch (e) {
-    console.warn('[LCU] wmic failed:', e.message);
-  }
-
   return null;
 }
 
 let lastLockfileLogged = null;
+let knownLockfilePath = null;   // where we last found League's lockfile
+let lastSlowSearchAt = 0;       // when we last ran the PowerShell search
+let slowSearchInFlight = null;  // the running PowerShell search, if any
+const SLOW_SEARCH_COOLDOWN_MS = 30000;
 
-function getLCUCredentials() {
-  // 1. Try all known lockfile paths (multi-drive)
-  for (const p of buildDefaultPaths()) {
-    if (fs.existsSync(p)) {
-      const creds = parseLockfile(p);
-      if (creds) {
-        if (lastLockfileLogged !== p) {
-          console.log('[LCU] Found lockfile at:', p);
-          lastLockfileLogged = p;
-        }
-        return creds;
+/**
+ * Finds League's port + password. Fast path: read the lockfile from where we
+ * found it before, or from the usual install folders (a few quick file checks).
+ * Slow path (PowerShell) runs at most once every 30 seconds, in the
+ * background, so RiftVault never freezes while League is closed.
+ */
+async function getLCUCredentials() {
+  const candidates = knownLockfilePath ? [knownLockfilePath, ...buildDefaultPaths()] : buildDefaultPaths();
+  for (const p of candidates) {
+    if (!fs.existsSync(p)) continue;
+    const creds = parseLockfile(p);
+    if (creds) {
+      knownLockfilePath = p;
+      if (lastLockfileLogged !== p) {
+        console.log('[LCU] Found lockfile at:', p);
+        lastLockfileLogged = p;
       }
+      return creds;
     }
   }
 
-  // 2. Try PowerShell process detection
-  const fromProcess = findLockfileViaPowerShell();
-  if (fromProcess) return fromProcess;
-
-  console.error('[LCU] Could not find lockfile or process credentials');
-  return null;
+  // League probably isn't running. Don't hammer Windows with searches.
+  if (slowSearchInFlight) return slowSearchInFlight;
+  if (Date.now() - lastSlowSearchAt < SLOW_SEARCH_COOLDOWN_MS) return null;
+  lastSlowSearchAt = Date.now();
+  slowSearchInFlight = findLockfileViaPowerShell()
+    .catch(() => null)
+    .finally(() => { slowSearchInFlight = null; });
+  const found = await slowSearchInFlight;
+  if (!found) console.log('[LCU] League client not found (will check again shortly).');
+  return found;
 }
 
 // ─── LCU HTTP CLIENT ──────────────────────────────────────────────────────────
@@ -194,17 +188,42 @@ function lcuRequest(port, password, endpoint, method = 'GET', body = null) {
 let ddVersion = null;
 let championData = null; // { key -> { name, id } }
 
-async function fetchJson(url) {
+async function fetchJson(url, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
+    const req = https.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume(); // discard the body
+        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        return;
+      }
       let data = '';
       res.on('data', (c) => (data += c));
       res.on('end', () => {
         try { resolve(JSON.parse(data)); }
         catch (e) { reject(e); }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    // Never wait forever on a slow server
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Timed out fetching ${url}`)));
   });
+}
+
+/**
+ * Downloads JSON once per League patch and keeps a copy on disk. Later startups
+ * on the same patch read the saved copy instead of downloading again.
+ */
+async function fetchJsonCachedPerPatch(name, patch, url) {
+  const cacheFile = path.join(app.getPath('userData'), `cache-${name}.json`);
+  try {
+    const saved = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    if (saved && saved.patch === patch && saved.data) return saved.data;
+  } catch (e) { /* no saved copy yet */ }
+  const data = await fetchJson(url, 60000);
+  try {
+    fs.writeFileSync(cacheFile, JSON.stringify({ patch, data }));
+  } catch (e) { /* saving is optional */ }
+  return data;
 }
 
 async function getDataDragonVersion() {
@@ -217,7 +236,8 @@ async function getDataDragonVersion() {
 async function getChampionData() {
   if (championData) return championData;
   const version = await getDataDragonVersion();
-  const data = await fetchJson(`https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/champion.json`);
+  const data = await fetchJsonCachedPerPatch('ddragon-champions', version,
+    `https://ddragon.leagueoflegends.com/cdn/${version}/data/en_US/champion.json`);
   // Build map: numeric key -> { name, id }
   championData = {};
   for (const [id, champ] of Object.entries(data.data)) {
@@ -244,11 +264,11 @@ function cdAssetUrl(assetPath) {
   return 'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/' + rel.toLowerCase();
 }
 
-async function fetchCDRarityMap() {
+async function fetchCDRarityMap(patch) {
   if (cdRarityMap) return cdRarityMap;
   try {
-    console.log('[CDragon] Fetching skin metadata...');
-    const raw = await fetchJson(
+    console.log('[CDragon] Loading skin metadata...');
+    const raw = await fetchJsonCachedPerPatch('cdragon-skins', patch,
       'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/skins.json'
     );
     cdRarityMap = {};
@@ -288,11 +308,11 @@ async function fetchCDRarityMap() {
 
 let cdSkinLineNames = null; // id → name string
 
-async function fetchSkinLineNames() {
+async function fetchSkinLineNames(patch) {
   if (cdSkinLineNames) return cdSkinLineNames;
   try {
-    console.log('[CDragon] Fetching skin line names...');
-    const raw = await fetchJson(
+    console.log('[CDragon] Loading skin line names...');
+    const raw = await fetchJsonCachedPerPatch('cdragon-skinlines', patch,
       'https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/skinlines.json'
     );
     cdSkinLineNames = {};
@@ -353,6 +373,9 @@ async function buildOwnedSkins(creds) {
 
   const summonerId = summoner.summonerId;
   const version = await getDataDragonVersion();
+  // Start the CommunityDragon downloads now so they run *while* we talk to the
+  // League client below, instead of waiting until the end
+  const cdPromise = Promise.all([fetchCDRarityMap(version), fetchSkinLineNames(version)]);
   const champions = await getChampionData();
 
   // Fetch ALL skins (not just owned) — skins-minimal includes ownership flags
@@ -426,10 +449,26 @@ async function buildOwnedSkins(creds) {
   console.log(`[LCU] Chromas found for ${Object.keys(chromaMap).length} skins`);
 
   // Fetch CommunityDragon rarity data + skin line names in parallel
-  const [cdMap, skinLineNames] = await Promise.all([fetchCDRarityMap(), fetchSkinLineNames()]);
+  const [cdMap, skinLineNames] = await cdPromise;
+
+  // Drop "ghost" entries: skins whose ID doesn't belong to a real champion, or
+  // that CommunityDragon's complete skin list doesn't know about. These showed
+  // up as blank cards and duplicates (e.g. a second Star Nemesis Fiddlesticks).
+  const cdLoaded = Object.keys(cdMap).length > 1000; // only trust the list if it loaded
+  const dropped = [];
+  const realSkinsRaw = allSkinsRaw.filter(skin => {
+    const isRealChampion = !!champions[String(Math.floor(skin.id / 1000))];
+    const isKnownSkin = !cdLoaded || !!cdMap[skin.id];
+    if (isRealChampion && isKnownSkin) return true;
+    dropped.push(`${skin.name || 'unnamed'} (${skin.id})`);
+    return false;
+  });
+  if (dropped.length) {
+    console.log(`[Skins] Skipped ${dropped.length} game-mode copies that aren't normal skins (e.g. ${dropped.slice(0, 3).join(', ')}).`);
+  }
 
   // Enrich all skins
-  const skins = allSkinsRaw.map(skin => {
+  const skins = realSkinsRaw.map(skin => {
     const champId = Math.floor(skin.id / 1000);
     const skinNum = skin.id % 1000;
     const champ = champions[String(champId)] || { name: 'Unknown', id: 'Unknown' };
@@ -535,6 +574,14 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
 
+  // Show the window's own [Images] and [3D] messages in the terminal too.
+  // (Newer Electron passes one "details" object; older passes separate values.)
+  mainWindow.webContents.on('console-message', (...args) => {
+    const first = args[0];
+    const message = (first && typeof first.message === 'string') ? first.message : args[2];
+    if (typeof message === 'string' && /^\[(Images|3D)\]/.test(message)) console.log(message);
+  });
+
   // ─── SYSTEM TRAY ───────────────────────────────────────────────────────────
   tray = new Tray(path.join(__dirname, 'assets/icon.ico'));
   tray.setToolTip('RiftVault');
@@ -603,7 +650,7 @@ function createWindow() {
 let cachedData = null;
 
 async function fetchSkinsData() {
-  const creds = getLCUCredentials();
+  const creds = await getLCUCredentials();
   if (!creds) {
     throw new Error('LEAGUE_NOT_RUNNING');
   }
@@ -666,7 +713,7 @@ ipcMain.handle('get-skin-prices', async () => {
 // ─── APPLY SKIN IN CLIENT ─────────────────────────────────────────────────────
 
 ipcMain.handle('select-skin', async (event, skinId) => {
-  const creds = getLCUCredentials();
+  const creds = await getLCUCredentials();
   if (!creds) return { success: false, error: 'NO_CLIENT' };
   try {
     const result = await lcuRequest(
@@ -751,6 +798,21 @@ async function enableAdBlocking() {
   }
 }
 
+// ─── ONE COPY AT A TIME ───────────────────────────────────────────────────────
+// Closing the window only hides RiftVault in the tray, so it's easy to start a
+// second copy by accident. If one is already running, focus it and quit this one.
+if (!app.requestSingleInstanceLock()) {
+  console.log('[App] RiftVault is already running. Showing the existing window instead.');
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
 app.whenReady().then(async () => {
   // Start ad blocking before any tab opens, but never hold up the app more than
   // 5 seconds (the very first run has to download the blocklists)
@@ -773,6 +835,30 @@ let lastHoveredChampId = null;
 let lastChampSelectActive = false;
 let lastLockedIn = false;
 
+// ─── HIDE TO TRAY WHEN A GAME STARTS ──────────────────────────────────────────
+// The League client reports a "gameflow phase": Lobby, ChampSelect, InProgress
+// (you're in the game), EndOfGame, and so on. When it switches to InProgress,
+// tuck RiftVault away into the system tray. It keeps running there, so Skin
+// Scout is ready again for your next champ select.
+let lastGameflowPhase = '';
+async function hideToTrayWhenGameStarts(creds) {
+  let phase = '';
+  try {
+    phase = await lcuRequest(creds.port, creds.password, '/lol-gameflow/v1/gameflow-phase');
+  } catch (e) { return; }
+  if (typeof phase !== 'string' || phase === lastGameflowPhase) return;
+  console.log(`[App] League status: ${phase}`);
+  lastGameflowPhase = phase;
+  // GameStart = loading screen, InProgress = in game, Reconnect = rejoining
+  if (['GameStart', 'InProgress', 'Reconnect'].includes(phase)) {
+    // hide() fully removes a window from the screen, the taskbar AND Alt+Tab,
+    // even if it was minimized. RiftVault keeps running in the tray.
+    if (mainWindow) mainWindow.hide();
+    scout.hideForGame();
+    console.log('[App] Game starting: RiftVault is hidden in the system tray.');
+  }
+}
+
 // Prints a status line to the terminal only when the status changes, so the
 // terminal shows a readable story ("waiting…", "champ select found…") instead
 // of the same line twice a second.
@@ -788,7 +874,7 @@ function startChampSelectPolling() {
 
   async function poll() {
     if (!mainWindow) { pollingInterval = setTimeout(poll, 2500); return; }
-    const creds = getLCUCredentials();
+    const creds = await getLCUCredentials();
     if (!creds) {
       scoutStatus('Cannot find the League client (no lockfile/credentials).');
       pollingInterval = setTimeout(poll, 2500);
@@ -829,13 +915,9 @@ function startChampSelectPolling() {
             championId: champId || 0,
             currentSkinId: localPlayer.selectedSkinId || 0,
           });
-          // Surface the window on the lock-in edge (not on champ select start)
-          if (isLockedIn && !lastLockedIn) {
-            if (mainWindow && !mainWindow.isVisible()) {
-              mainWindow.show();
-            }
-            mainWindow.focus();
-          }
+          // (The original app popped the main window up when you locked in.
+          // Skin Scout can equip skins now, so that pop-up was turned off to
+          // keep fewer windows open.)
           lastLockedIn = isLockedIn;
           lastChampSelectActive = true;
         }
@@ -846,6 +928,7 @@ function startChampSelectPolling() {
         scoutStatus(`Connected to League. Not in champ select (client says: ${reason}).`);
         lastHoveredChampId = null;
         scout.clear();
+        await hideToTrayWhenGameStarts(creds);
         if (lastChampSelectActive) {
           mainWindow.webContents.send('live-game-event', {
             type: 'champ-select-state',
@@ -861,6 +944,7 @@ function startChampSelectPolling() {
       scoutStatus(`Error talking to the League client: ${e.message}`);
       lastHoveredChampId = null;
       scout.clear();
+      await hideToTrayWhenGameStarts(creds); // the client can be slow mid-game; still check
       if (lastChampSelectActive) {
         mainWindow.webContents.send('live-game-event', {
           type: 'champ-select-state',

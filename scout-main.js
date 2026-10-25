@@ -27,8 +27,18 @@ let pickableFetchedAt = 0;
 let lastPayloadJson = '';
 let skinLoadInFlight = false;
 let lastUpdateSummary = '';
+let surfaceOnNextShow = false;
 
 const BOUNDS_FILE = () => path.join(app.getPath('userData'), 'scout-window.json');
+const PREFS_FILE = () => path.join(app.getPath('userData'), 'scout-prefs.json');
+
+// Pinned = always stays above other windows (including League).
+// Unpinned = a normal window: clicking League brings League to the front.
+let pinned = false;
+try { pinned = !!JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8')).pinned; } catch (e) { /* default: unpinned */ }
+function savePrefs() {
+  try { fs.writeFileSync(PREFS_FILE(), JSON.stringify({ pinned })); } catch (e) { /* not important */ }
+}
 
 // ─── WINDOW ───────────────────────────────────────────────────────────────────
 
@@ -74,8 +84,8 @@ function ensureWindow() {
     frame: false,
     resizable: true,
     show: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
+    skipTaskbar: pinned,   // unpinned windows get a taskbar button so you can bring them back
+    alwaysOnTop: pinned,
     backgroundColor: '#010a13',
     title: 'Skin Scout',
     webPreferences: {
@@ -85,7 +95,8 @@ function ensureWindow() {
     },
   });
   // 'floating' keeps it above the League client window
-  scoutWindow.setAlwaysOnTop(true, 'floating');
+  // 'floating' keeps a pinned window above the League client
+  if (pinned) scoutWindow.setAlwaysOnTop(true, 'floating');
   scoutWindow.loadFile('scout.html');
 
   scoutWindow.on('move', saveBoundsSoon);
@@ -110,6 +121,7 @@ function sendWindowState() {
   scoutWindow.webContents.send('scout-window-state', {
     maximized: scoutWindow.isMaximized(),
     collapsed: collapsedFromHeight !== null,
+    pinned,
   });
 }
 
@@ -122,6 +134,13 @@ function expandFromCollapsed() {
 
 function windowAction(action, headerHeight) {
   if (!scoutWindow || scoutWindow.isDestroyed()) return;
+
+  if (action === 'pin') {
+    pinned = !pinned;
+    scoutWindow.setAlwaysOnTop(pinned, 'floating');
+    scoutWindow.setSkipTaskbar(pinned);
+    savePrefs();
+  }
 
   if (action === 'maximize') {
     if (collapsedFromHeight !== null) expandFromCollapsed();
@@ -161,6 +180,12 @@ function showWindow() {
   const win = ensureWindow();
   // showInactive: appear without stealing keyboard focus from the League client
   if (!win.isVisible()) win.showInactive();
+  // When unpinned, bring it in front of League once at the start of champ
+  // select (without taking keyboard focus); after that, normal window rules apply
+  if (surfaceOnNextShow) {
+    surfaceOnNextShow = false;
+    if (!pinned) win.moveTop();
+  }
 }
 
 function hideWindow() {
@@ -263,6 +288,7 @@ async function update(session, creds) {
     isActive = true;
     dismissedThisLobby = false;
     pickableIds = null;
+    surfaceOnNextShow = true; // pop above League once when champ select starts
   }
   if (dismissedThisLobby) return;
 
@@ -270,7 +296,7 @@ async function update(session, creds) {
   if (!data) {
     if (lastUpdateSummary !== 'loading') {
       lastUpdateSummary = 'loading';
-      console.log('[Scout] Waiting for your skin collection to finish loading…');
+      console.log('[Scout] Waiting for your skin collection to finish loading...');
     }
     send({ state: 'loading' });
     showWindow();
@@ -380,6 +406,16 @@ function togglePreview() {
   return isPreview;
 }
 
+/** Called when a game starts: close any preview and hide the window */
+function hideForGame() {
+  if (isPreview) {
+    isPreview = false;
+    lastPayloadJson = '';
+    if (deps.onPreviewChange) deps.onPreviewChange(false);
+  }
+  hideWindow();
+}
+
 function dismiss() {
   if (isPreview) { togglePreview(); return; }
   dismissedThisLobby = true;
@@ -392,6 +428,6 @@ function destroy() {
 }
 
 module.exports = {
-  init, update, clear, togglePreview, dismiss, destroy, windowAction,
+  init, update, clear, togglePreview, dismiss, destroy, windowAction, hideForGame,
   isPreviewOn: () => isPreview,
 };

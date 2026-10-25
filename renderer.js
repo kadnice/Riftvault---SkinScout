@@ -118,8 +118,10 @@ const VIDEO_SPEED_SCRIPT = `
   }
 
   // Sites like YouTube reset the speed when a new video starts; put ours back
+  // (but leave YouTube ads alone, since the ad skipper below handles those)
   document.addEventListener('play', (e) => {
-    if (e.target instanceof HTMLVideoElement && e.target.playbackRate !== speed) {
+    const inAd = e.target.closest && e.target.closest('.ad-showing');
+    if (e.target instanceof HTMLVideoElement && !inAd && e.target.playbackRate !== speed) {
       e.target.playbackRate = speed;
     }
   }, true);
@@ -140,6 +142,38 @@ const VIDEO_SPEED_SCRIPT = `
     e.preventDefault();
     e.stopPropagation();
   }, true);
+
+  // ── YouTube ad skipper ──
+  // YouTube marks its player with the class "ad-showing" while an ad plays.
+  // When we see that: mute the ad, jump to its end, and press "Skip" if it's
+  // there. When the real video starts, we unmute it again.
+  if (/(^|\\.)youtube\\.com$/.test(location.hostname)) {
+    const hideAds = document.createElement('style');
+    hideAds.textContent =
+      '.ytp-ad-overlay-container, .ytp-ad-image-overlay, #masthead-ad, #player-ads,' +
+      'ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer, ytd-promoted-sparkles-web-renderer,' +
+      'ytd-banner-promo-renderer, ytd-statement-banner-renderer { display: none !important; }';
+    document.documentElement.appendChild(hideAds);
+
+    let mutedByUs = false;
+    setInterval(() => {
+      const player = document.querySelector('.html5-video-player');
+      const video = player && player.querySelector('video');
+      if (!video) return;
+      const adPlaying = player.classList.contains('ad-showing');
+      if (adPlaying) {
+        if (!video.muted) { video.muted = true; mutedByUs = true; }
+        if (isFinite(video.duration) && video.duration > 0) video.currentTime = video.duration;
+        const skip = document.querySelector(
+          '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');
+        if (skip) skip.click();
+      } else if (mutedByUs) {
+        video.muted = false; // ad is over: give the real video its sound back
+        mutedByUs = false;
+        if (video.playbackRate !== speed) video.playbackRate = speed;
+      }
+    }, 250);
+  }
 })();
 `;
 
@@ -1771,9 +1805,13 @@ async function loadSkins(isRefresh = false) {
 // ─── PANEL SEARCH ─────────────────────────────────────────────────────────────
 const panelSearch = document.getElementById('panel-search');
 panelSearch.addEventListener('focus', () => AudioController.play('search'));
+// Rebuilding the grid can mean 1,000+ cards, so wait until typing pauses
+// (150 ms) and rebuild once, instead of on every single letter
+let searchDebounceTimer = null;
 panelSearch.addEventListener('input', (e) => {
     searchQuery = e.target.value;
-    applyFilters();
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(applyFilters, 150);
 });
 
 // ─── SHOW UNOWNED TOGGLE ──────────────────────────────────────────────────────
