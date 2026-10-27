@@ -641,7 +641,7 @@ body.layout-focus .scout-strip {
   border-radius: 4px;
   overflow: hidden;
   background: #000;
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+  transition: transform 0.18s ease-out, box-shadow 0.18s ease-out, border-color 0.18s;
 }
 
 .focus-card__art img {
@@ -755,11 +755,28 @@ body.layout-focus .scout-strip {
 .focus-card__apply.is-equipping { opacity: 0.5; }
 .focus-card__apply.is-failed { background: #a33; border-color: #a33; }
 
-/* Every big card can be clicked to view it */
+/* Hover: the card lifts, gets a light outline and soft glow, and the art
+   brightens and zooms in slightly inside its frame. Every big card can be
+   clicked to view it. */
+.focus-card__art img { transition: transform 0.25s ease-out, filter 0.2s ease-out; }
+.focus-card__name { transition: color 0.18s; }
+
 .focus-card:hover .focus-card__art {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--gold-dim);
+  transform: translateY(-6px);
+  border-color: #f0e6d2;
+  /* Cream, not gold: gold means "equipped" */
+  box-shadow:
+    0 12px 26px rgba(0, 0, 0, 0.6),
+    0 0 0 2px rgba(240, 230, 210, 0.85),
+    0 0 18px rgba(240, 230, 210, 0.25);
 }
+
+.focus-card:hover .focus-card__art img { transform: scale(1.05); filter: brightness(1.12); }
+.focus-card:hover .focus-card__name { color: #fff; }
+
+/* Unowned skins brighten a little on hover too (but stay dimmed) */
+.focus-card.is-unowned:hover .focus-card__art img { filter: grayscale(0.6) brightness(0.7); }
+.focus-card.is-unowned:hover .focus-card__name { color: #b9c2cd; }
 
 .focus-card--transcendent .focus-card__art { border-top-color: var(--r-transcendent); }
 .focus-card--ultimate .focus-card__art { border-top-color: var(--r-ultimate); }
@@ -772,14 +789,13 @@ body.layout-focus .scout-strip {
   cursor: pointer;
 }
 
-.focus-card.can-equip:hover .focus-card__art {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--gold-dim);
-}
-
 .focus-card.is-equipped .focus-card__art {
   border-color: var(--gold);
   box-shadow: 0 0 0 2px var(--gold), 0 0 18px rgba(200, 155, 60, 0.5);
+}
+
+.focus-card.is-equipped:hover .focus-card__art {
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.6), 0 0 0 2px #f0c860, 0 0 26px rgba(200, 155, 60, 0.7);
 }
 
 .focus-card.is-equipped .focus-card__name {
@@ -1475,16 +1491,45 @@ body.layout-narrow .scout-footer__hint { display: none; }
 
 .skin-view.is-hidden { display: none; }
 
-.skin-view__art,
-.skin-view__art img {
+.skin-view__art {
+  /* The splash sits inside this box with a thin margin, so it's as big as
+     possible without touching the window edges or being cropped. The arrows,
+     counter, close button and name bar float on top of it. */
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: 12px 14px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.skin-view__art img { object-fit: cover; object-position: center 25%; }
+.skin-view__art img {
+  /* Whole picture, never cropped. fitSkinViewArt() in scout.js sets the
+     exact size so it fills the box; these limits are a safety net. */
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid var(--gold-dim);
+  border-radius: 6px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.7);
+}
+
 .skin-view.is-unowned .skin-view__art img { filter: grayscale(0.6) brightness(0.6); }
+
+/* Behind it: a blurred, darkened copy of the same art fills the window */
+.skin-view__backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.skin-view__backdrop img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.15);
+  filter: blur(28px) brightness(0.4) saturate(1.2);
+}
+
+.skin-view.is-unowned .skin-view__backdrop img { filter: blur(28px) brightness(0.3) grayscale(0.6); }
 
 .skin-view__close,
 .skin-view__nav {
@@ -1498,7 +1543,39 @@ body.layout-narrow .scout-footer__hint { display: none; }
   cursor: pointer;
 }
 
-.skin-view__close { top: 12px; right: 12px; width: 34px; height: 34px; border-radius: 4px; font-size: 15px; }
+/* Top left: "9 of 20" while flipping through skins */
+.skin-view__count {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  padding: 7px 14px;
+  border: 1px solid var(--gold-dim);
+  border-radius: 20px;
+  background: rgba(1, 10, 19, 0.8);
+  color: #c9d1db;
+  font-size: 17px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
+.skin-view__count b { color: var(--gold-light); font-weight: 700; }
+
+/* Close: big and easy to spot */
+.skin-view__close {
+  top: 14px;
+  right: 14px;
+  width: 46px;
+  height: 46px;
+  z-index: 2;
+  border: 2px solid var(--gold);
+  border-radius: 50%;
+  background: rgba(1, 10, 19, 0.88);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+
+.skin-view__close:hover { background: var(--gold); color: #010a13; transform: scale(1.08); }
 
 .skin-view__nav {
   top: 50%;
@@ -1513,7 +1590,6 @@ body.layout-narrow .scout-footer__hint { display: none; }
 .skin-view__nav.is-prev { left: 12px; }
 .skin-view__nav.is-next { right: 12px; }
 
-.skin-view__close:hover,
 .skin-view__nav:hover { border-color: var(--gold); background: rgba(200, 155, 60, 0.25); }
 
 .skin-view__bar {
@@ -1523,29 +1599,50 @@ body.layout-narrow .scout-footer__hint { display: none; }
   bottom: 0;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 50px 22px 18px;
+  gap: 16px;
+  padding: 60px 24px 20px;
   background: linear-gradient(to top, rgba(1, 6, 12, 0.95) 30%, rgba(1, 6, 12, 0));
 }
 
-.skin-view__gem { flex: none; width: 46px; height: 46px; }
+.skin-view__gem { flex: none; width: 62px; height: 62px; }
 
 .skin-view__text { flex: 1; min-width: 0; }
 
 .skin-view__name {
   color: var(--gold-light);
   font-family: 'Cinzel', serif;
-  font-size: clamp(20px, 3vw, 32px);
+  font-size: clamp(26px, 3.2vw, 44px);
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.skin-view__sub { margin-top: 2px; color: #a9b4c2; font-size: 13px; }
+.skin-view__sub {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  color: #c3ccd7;
+  font-size: clamp(16px, 1.5vw, 21px);
+}
 
-.skin-view__chromas { position: relative; top: auto; right: auto; flex: none; width: 42px; height: 42px; }
-.skin-view__chromas span { font-size: 14px; }
+.skin-view__dot { margin: 0 10px; color: #6b7a8c; }
+
+/* RP price: icon + amount */
+.skin-view__price {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--gold-light);
+  font-weight: 600;
+}
+
+.skin-view__price img { width: 1.25em; height: 1.25em; object-fit: contain; }
+.skin-view__price.is-special { color: #c9b27c; font-weight: 500; font-style: italic; }
+
+.skin-view__chromas { position: relative; top: auto; right: auto; flex: none; width: 52px; height: 52px; }
+.skin-view__chromas span { font-size: 17px; }
 
 .skin-view__equip,
 .skin-view__state {
@@ -1553,9 +1650,9 @@ body.layout-narrow .scout-footer__hint { display: none; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 18px;
+  padding: 11px 22px;
   border-radius: 4px;
-  font: 600 14px 'Inter', sans-serif;
+  font: 600 17px 'Inter', sans-serif;
 }
 
 .skin-view__equip {
@@ -1592,7 +1689,8 @@ body.layout-narrow .scout-footer__hint { display: none; }
 
 .skin-view__legacy {
   display: inline-block;
-  width: 16px;
-  height: 16px;
-  vertical-align: -3px;
+  width: 1.25em;
+  height: 1.25em;
+  margin-right: 6px;
+  vertical-align: -0.25em;
 }

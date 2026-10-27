@@ -443,6 +443,53 @@ function chromaInfo(skin) {
   }));
 }
 
+// ─── Skin prices (RiftVault's price list, assets/skin_prices.json) ──────────
+// Keys look like "aatrox_justicar": champion + skin name, lowercase, letters
+// and numbers only, champion name removed from the skin name. Values are an
+// RP amount ("1350") or how the skin was sold ("Special", "Battle Pass", ...).
+let priceList = null;
+function loadPrices() {
+  if (priceList) return priceList;
+  try {
+    priceList = JSON.parse(fs.readFileSync(path.join(__dirname, 'assets', 'skin_prices.json'), 'utf8'));
+  } catch (e) {
+    console.warn('[Scout] Could not load skin prices:', e.message);
+    priceList = {};
+  }
+  return priceList;
+}
+
+const clean = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Tiers that always cost the same RP (used for skins newer than the price list)
+const TIER_RP = { epic: 1350, legendary: 1820, ultimate: 3250 };
+
+/** { rp: 1350 } for RP skins, { label: 'Battle Pass' } for others, or null */
+function skinPrice(s) {
+  if (s.isBase) return null;
+  const prices = loadPrices();
+  const champ = clean(s.championName);
+  const name = clean(s.name);
+  const candidates = [
+    name !== champ && name.includes(champ) ? `${champ}_${name.replace(champ, '')}` : null,
+    `${champ}_${name}`,
+    `${clean(s.championKey)}_${name.replace(champ, '')}`, // e.g. Wukong = MonkeyKing
+  ];
+  for (const key of candidates) {
+    const value = key && prices[key];
+    if (!value) continue;
+    const rp = Number(value);
+    return rp > 0 ? { rp } : { label: value === 'Special' ? 'Special' : value };
+  }
+  // Not in the list (newer skin): Epic / Legendary / Ultimate have fixed prices
+  if (TIER_RP[s.rarity]) return { rp: TIER_RP[s.rarity] };
+  // Mythic / Exalted / Transcendent and Victorious skins are never sold for RP
+  if (['mythic', 'exalted', 'transcendent'].includes(s.rarity) || /^victorious /i.test(s.name)) {
+    return { label: 'Special' };
+  }
+  return null; // unknown: show nothing rather than guess
+}
+
 /** What the window needs to draw one skin card */
 function skinCard(s) {
   return {
@@ -451,6 +498,7 @@ function skinCard(s) {
     rarity: s.rarity,
     isLegacy: !!s.isLegacy,
     clientGemPath: s.clientGemPath === undefined ? null : s.clientGemPath,
+    price: skinPrice(s),
     img: s.loadingUrl,
     fallbacks: s.imageFallbacks || [],
     splash: s.splashUrl,          // wide art for the full-window skin view

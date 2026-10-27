@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.4.2] - 2026-10-26
+
+Bug fixes and polish for Skin Scout's skin cards and full-window skin view.
+
+### Fixed
+- **Tier gems now match the League client exactly.** Skins with no tier in the client (e.g. Neon Strike Vi, Victorious Draven, Totemic Maokai) show no gem; Epic, Legendary, Ultimate, Mythic, Exalted and Transcendent show theirs. Checked against all 2,132 skins: no mismatches.
+- **975 RP "Rare" skins** (e.g. Arcane Undercity Vi, Victorious Maokai) were labeled Epic. They now count as having no tier, like in the client. This also fixes RiftVault's main collection window.
+- **Splash art on vertical monitors** was cut off on both sides. The whole picture now always shows, never cropped.
+- **Splash art stayed small on big monitors.** It now scales up to fit the window (up to 30% larger than its original size).
+
+### Added
+- **Legacy emblem** in the bottom-left corner of legacy skin cards, and "Legacy" in the skin view.
+- **RP price** in the skin view, with the RP icon (from RiftVault's price list; newer Epic / Legendary / Ultimate skins use their fixed price). Skins not sold for RP say "Special distribution", "Battle Pass" or "Sanctum".
+- **Skin counter** ("9 of 20") moved to the top-left corner of the skin view, in larger text.
+
+### Changed
+- **Stronger hover effect** on skin portraits: the card lifts, gets a cream outline and glow, and the art brightens and zooms slightly. (Gold still means "equipped".)
+- **Skin view layout:** the splash sits in a thin gold frame over a blurred copy of itself, with a small margin instead of running edge to edge.
+- **Bigger close button** (round, gold ring, white X; turns gold on hover).
+- **Bigger, more readable text** in the bottom-left corner of the skin view: skin name, info line (tier, RP, Legacy) and icons.
+- "No tier" is no longer written for skins without a tier; that spot is left out.
+- The League client's own gem information is saved with each skin (`clientGemPath`) for future checks.
+
+---
+
 ## [0.4.1] - 2026-10-26
 
 ### Added

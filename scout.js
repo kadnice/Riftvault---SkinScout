@@ -614,6 +614,17 @@ function viewableSkins(champ) {
     ...unownedFor(champ).map(s => ({ skin: s, owned: false }))];
 }
 
+// "[RP icon] 1350" for RP skins; "Special distribution" / "Battle Pass" / ...
+// for skins that weren't sold for RP; nothing when the price is unknown
+function priceHtml(price) {
+  if (!price) return '';
+  if (price.rp) {
+    return `<span class="skin-view__price" title="${price.rp} Riot Points"><img src="assets/icon-riot-points.png" alt="RP" draggable="false" />${price.rp.toLocaleString('en-US')}</span>`;
+  }
+  const label = price.label === 'Special' ? 'Special distribution' : price.label;
+  return `<span class="skin-view__price is-special" title="Not sold for RP">${escapeHtml(label)}</span>`;
+}
+
 function openSkinView(champ, skinId) {
   const list = viewableSkins(champ);
   const i = list.findIndex(x => x.skin.id === skinId);
@@ -631,24 +642,52 @@ function openSkinView(champ, skinId) {
     : '';
   skinView.classList.toggle('is-unowned', !owned);
   skinView.innerHTML = `
+    <div class="skin-view__backdrop" aria-hidden="true">${imgTag(skin.splash || skin.img, [skin.img, ...(skin.fallbacks || [])])}</div>
     <div class="skin-view__art">${imgTag(skin.splash || skin.img, [skin.img, ...(skin.fallbacks || [])])}</div>
-    <button class="skin-view__close" data-skin-close title="Close (Esc)">&#x2715;</button>
+    <div class="skin-view__count" title="Skin ${i + 1} of ${list.length} (← → to flip)"><b>${i + 1}</b> of ${list.length}</div>
+    <button class="skin-view__close" data-skin-close title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
     ${arrows}
     <div class="skin-view__bar">
       ${tierGemHtml(skin, 'skin-view__gem')}
       <div class="skin-view__text">
         <div class="skin-view__name">${escapeHtml(skin.name)}</div>
-        <div class="skin-view__sub">${tierOf(skin) ? `${TIER_ICON[tierOf(skin)]} skin` : 'No tier'}${skin.isLegacy ? ` · ${legacyHtml(skin, 'skin-view__legacy')} Legacy` : ''} · ${i + 1} of ${list.length}</div>
+        <div class="skin-view__sub">${[
+          tierOf(skin) ? `${TIER_ICON[tierOf(skin)]} skin` : '', // no tier: leave it out (like the League client)
+          priceHtml(skin.price),
+          skin.isLegacy ? `${legacyHtml(skin, 'skin-view__legacy')} Legacy` : '',
+        ].filter(Boolean).join('<span class="skin-view__dot">·</span>')}</div>
       </div>
       ${chromaBadgeHtml(skin, champ.id, 'skin-view__chromas')}
       ${action}
     </div>`;
   skinView.classList.remove('is-hidden');
+  const artImg = skinView.querySelector('.skin-view__art img');
+  if (artImg) {
+    artImg.addEventListener('load', fitSkinViewArt); // also after a backup image loads
+    fitSkinViewArt();
+  }
   // Same as clicking a card before: this skin is the one 3D model / Spotlight show
   pickedSkinId = skinId;
   pickedSkinChampId = champ.id;
   pickedSkinName = '';
 }
+
+// Scale the splash to the largest size that fits its box, keeping its shape.
+// (CSS max-width alone only shrinks a picture, never enlarges it, so on big
+// windows the splash stayed at its original ~1215 px.)
+const SPLASH_MAX_SCALE = 1.3;
+function fitSkinViewArt() {
+  const box = skinView.querySelector('.skin-view__art');
+  const img = box && box.querySelector('img');
+  if (!img || !img.naturalWidth) return;
+  // Fit the box, but never more than SPLASH_MAX_SCALE × the picture's own size
+  // (1.3 = 30% bigger than before), so on big monitors it stays a framed
+  // picture instead of filling the whole screen.
+  const scale = Math.min(box.clientWidth / img.naturalWidth, box.clientHeight / img.naturalHeight, SPLASH_MAX_SCALE);
+  img.style.width = `${Math.floor(img.naturalWidth * scale)}px`;
+  img.style.height = `${Math.floor(img.naturalHeight * scale)}px`;
+}
+window.addEventListener('resize', () => { if (skinViewId !== null) fitSkinViewArt(); });
 
 function closeSkinView() {
   skinViewId = null;
