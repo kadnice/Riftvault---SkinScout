@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.4.1] - 2026-10-26
+
+### Added
+- **Skin count out of the total**: the big view header now reads "6 / 8 skins owned" (owned in gold, total released skins in gray) instead of "6 owned skins · Click a skin to equip it". The equip hint moved to the tooltip.
+- **"Show unowned" button next to the skin count**: the same setting as the "Unowned skins" button at the bottom; clicking either one updates both. Hidden when you own every skin for that champion.
+- **No-skins states**: champions you own no skins for are shown in gray (never red), with a "No skins" section in ARAM.
+- **RiftVault-style skin cards**: tier gem (Epic, Legendary, Ultimate, Mythic, Exalted, Transcendent) at the bottom center of each portrait, a chroma badge in the top-right corner (number = chromas you own), and an equip check mark in the top-left corner.
+- **Chroma viewer**: click a chroma badge to see every chroma of that skin, owned first, unowned dimmed with a lock.
+- **Full-window skin view**: click a skin to show its splash art across the whole window, with its tier, chromas and an Equip button. Left/right arrows (or the ← → keys) flip through the skins; Esc or ✕ closes it.
+- **Footer toggles**: "No-skin champs" (also list champions you own no skins for) and "Unowned skins" (show skins you don't own, dimmed with a lock). Both are remembered.
+
+### Changed
+- **Clicking a big skin card now opens it full-window instead of equipping it.** Equip with the check mark on the card or the Equip button in the full view. (The small one-column layout still equips on click.)
+- Bigger section labels in ARAM.
+
+---
+
 ## [0.4.0] - 2026-10-25 (Skin Scout edition, private fork)
 
 Built in one night on a private copy of RiftVault. The main goal: see which champions you own skins for **before** locking in.

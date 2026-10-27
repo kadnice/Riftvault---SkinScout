@@ -4,3 +4,7 @@ node_modules/
 .agent
 .claude/
 assets/old-assets/
+dist/
+# Personal skin data copied in for checking (not for GitHub)
+skin-cache.json
+cache-*.json

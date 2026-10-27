@@ -413,6 +413,61 @@ function hideWindow() {
 
 /** Champion id → { id, key, name }, for ANY champion (owned skins or not) */
 const champInfoCache = new WeakMap();
+function allChampInfo(data) {
+  champInfo(data, 0); // builds the cache
+  return champInfoCache.get(data);
+}
+
+/** A champion you own no skins for, in the same shape as the others */
+function noSkinEntry(data, id) {
+  const info = champInfo(data, id);
+  if (!info) return null;
+  return {
+    ...info,
+    iconUrl: `https://ddragon.leagueoflegends.com/cdn/${data.version}/img/champion/${info.key}.png`,
+    skins: [],
+    skinCount: 0,
+    noSkins: true,
+  };
+}
+
+/** A skin's chromas, trimmed to what the window needs:
+ *  [{ id, name, owned, colors }] (empty list when the skin has none) */
+function chromaInfo(skin) {
+  const list = (skin.chromas && skin.chromas.list) || [];
+  return list.map(c => ({
+    id: c.id,
+    name: c.name || '',
+    owned: c.ownership?.owned === true || c.owned === true || c.isOwned === true || c.unlocked === true,
+    colors: Array.isArray(c.colors) ? c.colors.slice(0, 2) : [],
+  }));
+}
+
+/** What the window needs to draw one skin card */
+function skinCard(s) {
+  return {
+    id: s.id,
+    name: s.name,
+    rarity: s.rarity,
+    isLegacy: !!s.isLegacy,
+    clientGemPath: s.clientGemPath === undefined ? null : s.clientGemPath,
+    img: s.loadingUrl,
+    fallbacks: s.imageFallbacks || [],
+    splash: s.splashUrl,          // wide art for the full-window skin view
+    chromas: chromaInfo(s),
+  };
+}
+
+/** Skins of one champion that you DON'T own (asked for by the window when
+ *  the "Unowned skins" toggle is on) */
+function unownedSkins(champId) {
+  const data = deps.getSkinData();
+  if (!data) return [];
+  return (data.skins || [])
+    .filter(s => s.championId === champId && !s.owned && !s.isBase)
+    .map(skinCard);
+}
+
 function champInfo(data, id) {
   if (!champInfoCache.has(data)) {
     const map = {};
@@ -446,13 +501,7 @@ function buildOwnedIndex(data) {
         skins: [],
       };
     }
-    index[s.championId].skins.push({
-      id: s.id,
-      name: s.name,
-      rarity: s.rarity,
-      img: s.loadingUrl,
-      fallbacks: s.imageFallbacks || [],
-    });
+    index[s.championId].skins.push(skinCard(s));
   }
   ownedIndexCache.set(data, index);
   return index;
@@ -601,11 +650,23 @@ async function runUpdate(session, creds) {
 
   const seen = new Set();
   const champions = [];
+  const noSkinChamps = []; // available champions you own no skins for
   for (const id of candidateIds) {
     if (!id || seen.has(id)) continue;
     seen.add(id);
     const entry = owned[id];
-    if (!entry) continue; // no owned skins → hidden (keeps the list short)
+    if (!entry) {
+      const info = noSkinEntry(data, id);
+      if (info) {
+        noSkinChamps.push({
+          ...info,
+          isMine: id === myChampId,
+          onBench: benchIds.includes(id),
+          onTeam: teammateIds.includes(id),
+        });
+      }
+      continue;
+    }
     champions.push({
       ...entry,
       skinCount: entry.skins.length,
@@ -635,6 +696,7 @@ async function runUpdate(session, creds) {
     mode: isBenchMode ? 'bench' : 'draft',
     hoverId,
     champions,
+    noSkinChamps: noSkinChamps.sort((a, b) => a.name.localeCompare(b.name)),
     availableCount: seen.size,
   });
   showWindow();
@@ -692,10 +754,19 @@ function renderPreview() {
     send({ state: lastLoadError === 'LEAGUE_NOT_RUNNING' ? 'waiting' : 'loading', preview: true });
     return;
   }
-  const champions = Object.values(buildOwnedIndex(data))
+  const owned = buildOwnedIndex(data);
+  const champions = Object.values(owned)
     .map(c => ({ ...c, skinCount: c.skins.length, isMine: false, onBench: false }))
     .sort((a, b) => (b.skinCount - a.skinCount) || a.name.localeCompare(b.name));
-  send({ state: 'ready', mode: 'preview', preview: true, hoverId: 0, champions, availableCount: champions.length });
+  // Every other champion: the ones you own no skins for
+  const noSkinChamps = Object.keys(allChampInfo(data))
+    .map(Number).filter(id => !owned[id])
+    .map(id => noSkinEntry(data, id)).filter(Boolean)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  send({
+    state: 'ready', mode: 'preview', preview: true, hoverId: 0,
+    champions, noSkinChamps, availableCount: champions.length + noSkinChamps.length,
+  });
 }
 
 /** Tray "Preview" — shows every champion you own skins for, no lobby needed */
@@ -755,7 +826,7 @@ function destroy() {
 
 module.exports = {
   init, update, clear, togglePreview, dismiss, destroy, windowAction, hideForGame,
-  afterGame, setKeepOpenForGuide, toggleGuideInGame,
+  afterGame, setKeepOpenForGuide, toggleGuideInGame, unownedSkins,
   // Is this the Skin Scout window? (used to keep panel links inside the panel)
   isScoutHost: (wc) => !!(wc && scoutWindow && !scoutWindow.isDestroyed() && wc === scoutWindow.webContents),
   // Tell the window to show this skin's Spotlight in its panel. False if it can't.

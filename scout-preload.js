@@ -15,4 +15,5 @@ contextBridge.exposeInMainWorld('scoutAPI', {
   onGameStart: (callback) => ipcRenderer.on('scout-game', (event, info) => callback(info)),
   onShowSpotlight: (callback) => ipcRenderer.on('scout-spotlight', (event, info) => callback(info)),
   openMainWindow: () => ipcRenderer.send('scout-open-main'),
+  getUnownedSkins: (champId) => ipcRenderer.invoke('scout-unowned-skins', champId),
 });

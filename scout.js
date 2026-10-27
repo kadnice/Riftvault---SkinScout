@@ -88,7 +88,8 @@ function wikiUrl(champName) {
 /** The skin for 3D model / Spotlight: your last click, else equipped, else the first */
 function panelSkin(champ) {
   const skins = champ.skins || [];
-  return (pickedSkinChampId === champ.id && skins.find(s => s.id === pickedSkinId)) ||
+  const all = skins.concat(unownedCache[champ.id] || []);
+  return (pickedSkinChampId === champ.id && all.find(s => s.id === pickedSkinId)) ||
     skins.find(s => s.id === champ.selectedSkinId) || skins[0] || null;
 }
 
@@ -380,6 +381,64 @@ function smallSkinsHtml(champ) {
   }).join('');
 }
 
+// ─── "No skins" display + the two footer toggles ───────────────────────────────
+// Gray = you own no skins (never red: it isn't an error). Both toggles start off.
+//   "No-skin champs": also list champions you own no skins for (preview +
+//                     normal champ select; ARAM always shows them)
+//   "Unowned skins":  in the big view, also show skins you don't own (dimmed)
+let showNoSkinChamps = false;
+let showUnowned = false;
+try {
+  showNoSkinChamps = localStorage.getItem('scoutShowNoSkin') === '1';
+  showUnowned = localStorage.getItem('scoutShowUnowned') === '1';
+} catch (e) { /* storage unavailable */ }
+const unownedCache = {};      // champion id → skins you don't own
+const unownedLoading = new Set();
+
+// The unowned list is always fetched (it feeds the "6 / 8" count), but the
+// dimmed cards only appear while "Show unowned" is on.
+function unownedFor(champ) {
+  return showUnowned ? unownedList(champ) || [] : [];
+}
+
+// Skins you don't own for this champion, or null while still loading
+function unownedList(champ) {
+  if (!champ) return null;
+  if (unownedCache[champ.id]) return unownedCache[champ.id];
+  if (!unownedLoading.has(champ.id)) {
+    unownedLoading.add(champ.id);
+    window.scoutAPI.getUnownedSkins(champ.id).then((skins) => {
+      unownedCache[champ.id] = Array.isArray(skins) ? skins : [];
+      unownedLoading.delete(champ.id);
+      lastHtml.focus = '';
+      if (lastPayload) render(lastPayload);
+    }).catch(() => unownedLoading.delete(champ.id));
+  }
+  return null;
+}
+
+// Each toggle returns a "flip" function, so a second button (like "Show
+// unowned" next to the skin count) can flip the very same setting.
+function setupToggle(id, getter, setter, storageKey) {
+  const btn = document.getElementById(id);
+  const paint = () => {
+    btn.classList.toggle('is-on', getter());
+    btn.setAttribute('aria-pressed', getter() ? 'true' : 'false');
+  };
+  const flip = () => {
+    setter(!getter());
+    try { localStorage.setItem(storageKey, getter() ? '1' : '0'); } catch (e) { /* not important */ }
+    paint();
+    Object.keys(lastHtml).forEach(k => { lastHtml[k] = ''; });
+    if (lastPayload) render(lastPayload);
+  };
+  btn.addEventListener('click', flip);
+  paint();
+  return flip;
+}
+setupToggle('tg-noskin', () => showNoSkinChamps, v => { showNoSkinChamps = v; }, 'scoutShowNoSkin');
+const flipUnowned = setupToggle('tg-unowned', () => showUnowned, v => { showUnowned = v; }, 'scoutShowUnowned');
+
 // ARAM groups: which color/section a champion belongs to
 function groupOf(champ) {
   if (champ.isMine) return 'you';
@@ -394,9 +453,11 @@ const ARAM_SECTIONS = [
   { group: 'team', label: 'Teammates · trade to get' },
 ];
 
-function rowHtml(champ, { selectedId, openIds, layout }) {
+function rowHtml(champ, { selectedId, openIds, layout, compact = false, note = '' }) {
   const cls = ['scout-row'];
   if (groupOf(champ)) cls.push(`is-${groupOf(champ)}`);
+  if (champ.noSkins) cls.push('is-noskins');
+  if (compact) cls.push('is-compact');
   const isSelected = champ.id === selectedId;
   if (isSelected) cls.push('is-hovered');
   // Only the small layout opens rows in place; the large layouts show skins in the big panel
@@ -405,30 +466,262 @@ function rowHtml(champ, { selectedId, openIds, layout }) {
     <section class="${cls.join(' ')}" data-id="${champ.id}">
       <div class="scout-row__main">
         <img class="scout-row__icon" src="${escapeHtml(champ.iconUrl)}" alt="" />
-        <div class="scout-row__name">${escapeHtml(champ.name)} ${tagsFor(champ)}</div>
+        <div class="scout-row__name">${escapeHtml(champ.name)} ${tagsFor(champ)}${note ? `<span class="noskins-note">${escapeHtml(note)}</span>` : ''}</div>
         <button class="scout-row__guide" data-guide="${escapeHtml(champ.key)}" data-id="${champ.id}" title="Skill Capped build guide"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg></button>
-        <div class="scout-row__count" title="${champ.skinCount} owned skin${champ.skinCount === 1 ? '' : 's'}">${champ.skinCount}</div>
+        <div class="scout-row__count${champ.skinCount ? '' : ' is-zero'}" title="${champ.skinCount} owned skin${champ.skinCount === 1 ? '' : 's'}">${champ.skinCount}</div>
       </div>
-      ${layout === 'narrow' ? `<div class="scout-row__skins">${smallSkinsHtml(champ)}</div>` : ''}
+      ${layout === 'narrow' && !champ.noSkins ? `<div class="scout-row__skins">${smallSkinsHtml(champ)}</div>` : ''}
     </section>`;
 }
 
 function stripHtml(champs, selectedId) {
   return champs.map(c => `
-    <button class="scout-strip__item${c.id === selectedId ? ' is-selected' : ''}${groupOf(c) ? ` is-${groupOf(c)}` : ''}" data-id="${c.id}" title="${escapeHtml(c.name)}">
+    <button class="scout-strip__item${c.id === selectedId ? ' is-selected' : ''}${groupOf(c) ? ` is-${groupOf(c)}` : ''}${c.noSkins ? ' is-noskins' : ''}" data-id="${c.id}" title="${escapeHtml(c.name)}${c.noSkins ? ' (no skins owned)' : ''}">
       <img src="${escapeHtml(c.iconUrl)}" alt="" />
       <span class="scout-strip__count">${c.skinCount}</span>
     </button>`).join('');
 }
 
+// ─── Skin tier icons + chromas (borrowed from RiftVault's collection view) ────
+// Gems match the League client exactly: a skin with no tier there (under
+// 1350 RP, e.g. Neon Strike Vi, Debonair Jace) gets no gem here either.
+const TIER_ICON = {
+  transcendent: 'Transcendent', exalted: 'Exalted', ultimate: 'Ultimate',
+  mythic: 'Mythic', legendary: 'Legendary', epic: 'Epic',
+};
+function tierOf(skin) {
+  // The client said "no gem" for this skin: trust it
+  if (skin.clientGemPath === '') return null;
+  return TIER_ICON[skin.rarity] ? skin.rarity : null;
+}
+
+const EQUIP_ICON = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>';
+
+function tierGemHtml(skin, cls) {
+  const tier = tierOf(skin);
+  if (!tier) return '';
+  return `<span class="${cls} is-${tier}" title="${TIER_ICON[tier]} skin"><img src="assets/tier-icons/${tier}.png" alt="${TIER_ICON[tier]}" draggable="false" /></span>`;
+}
+
+// Legacy Vault skins: RiftVault's legacy emblem
+function legacyHtml(skin, cls) {
+  return skin.isLegacy
+    ? `<span class="${cls}" title="Legacy skin (Legacy Vault: not normally sold)"><img src="assets/tier-icons/legacy.png" alt="Legacy" draggable="false" /></span>`
+    : '';
+}
+
+function chromaBadgeHtml(skin, champId, cls) {
+  const chromas = skin.chromas || [];
+  if (!chromas.length) return '';
+  const owned = chromas.filter(c => c.owned).length;
+  return `<button class="${cls}${owned ? '' : ' is-none-owned'}" data-chromas="${skin.id}" data-champ-id="${champId}"
+      title="Chromas: ${owned} of ${chromas.length} owned (click to view)">
+      <img src="assets/tier-icons/chroma.png" alt="" draggable="false" /><span>${owned}</span>
+    </button>`;
+}
+
+// RiftVault card layout, drawn on top of the skin art:
+//   top-left: Apply button (or a lock if you don't own it)
+//   top-right: chroma badge   ·   bottom center: tier gem   ·   bottom-left: legacy
+function cardOverlaysHtml(skin, champ, owned) {
+  const corner = !owned
+    ? '<span class="focus-card__lock" aria-hidden="true"></span>'
+    : (champ.canEquip ? `<button class="focus-card__apply" data-equip="${skin.id}" title="Equip this skin">${EQUIP_ICON}</button>` : '');
+  return corner + chromaBadgeHtml(skin, champ.id, 'focus-card__chromas') + tierGemHtml(skin, 'focus-card__gem')
+    + legacyHtml(skin, 'focus-card__legacy');
+}
+
+// Chroma viewer: a pop-up over the skins. Lives outside the skins area so the
+// 3-times-a-second refresh doesn't wipe it.
+const chromaPop = document.createElement('div');
+chromaPop.className = 'chroma-pop is-hidden';
+document.body.appendChild(chromaPop);
+let chromaPopSkinId = null;
+let lastFocusChamp = null;   // the champion shown in the big view right now
+
+// "Bioforge Darius (Ruby)" → "Ruby"
+function chromaLabel(chroma, skinName) {
+  const m = /\(([^)]+)\)\s*$/.exec(chroma.name);
+  if (m) return m[1];
+  return chroma.name && chroma.name !== skinName ? chroma.name : `Chroma ${chroma.id % 1000}`;
+}
+
+function findSkin(champ, skinId) {
+  if (!champ) return null;
+  return champ.skins.find(s => s.id === skinId)
+    || (unownedCache[champ.id] || []).find(s => s.id === skinId) || null;
+}
+
+function openChromas(champ, skinId) {
+  const skin = findSkin(champ, skinId);
+  if (!skin || !skin.chromas || !skin.chromas.length) return;
+  chromaPopSkinId = skinId;
+  // Owned chromas first, then by ID
+  const list = [...skin.chromas].sort((a, b) => (a.owned === b.owned ? a.id - b.id : (a.owned ? -1 : 1)));
+  const ownedCount = list.filter(c => c.owned).length;
+  const items = list.map(c => {
+    const swatch = c.colors.length
+      ? `<span class="chroma-pop__swatch" style="background:linear-gradient(135deg, ${c.colors.map(escapeHtml).join(', ')})"></span>`
+      : '';
+    const img = `https://raw.communitydragon.org/latest/plugins/rcp-be-lol-game-data/global/default/v1/champion-chroma-images/${champ.id}/${c.id}.png`;
+    return `<figure class="chroma-pop__item${c.owned ? '' : ' is-locked'}" title="${escapeHtml(c.name)}${c.owned ? '' : ' (not owned)'}">
+      <div class="chroma-pop__art"><img src="${img}" alt="" draggable="false" onerror="this.style.visibility='hidden'" />${c.owned ? '' : '<span class="focus-card__lock" aria-hidden="true"></span>'}</div>
+      <figcaption>${swatch}${escapeHtml(chromaLabel(c, skin.name))}</figcaption>
+    </figure>`;
+  }).join('');
+  chromaPop.innerHTML = `
+    <div class="chroma-pop__box" role="dialog" aria-label="Chromas">
+      <header class="chroma-pop__head">
+        <img src="assets/tier-icons/chroma.png" alt="" draggable="false" />
+        <div class="chroma-pop__title">${escapeHtml(skin.name)}<span>${ownedCount} / ${list.length} chromas owned</span></div>
+        <button class="chroma-pop__close" data-chroma-close title="Close (Esc)">&#x2715;</button>
+      </header>
+      <div class="chroma-pop__grid">${items}</div>
+    </div>`;
+  chromaPop.classList.remove('is-hidden');
+}
+
+function closeChromas() {
+  chromaPopSkinId = null;
+  chromaPop.classList.add('is-hidden');
+  chromaPop.innerHTML = '';
+}
+
+chromaPop.addEventListener('click', (e) => {
+  // Close with the X or by clicking the dark area around the box
+  if (e.target.closest('[data-chroma-close]') || !e.target.closest('.chroma-pop__box')) closeChromas();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && chromaPopSkinId !== null) {
+    e.preventDefault(); // Esc closes only the chroma pop-up, not the skin view under it
+    closeChromas();
+  }
+});
+
+// ─── Full-window skin view (click a skin card) ──────────────────────────────
+// Like RiftVault's skin detail: the wide splash art fills the window, with the
+// tier, chromas and an Equip button along the bottom. ← / → flip through skins.
+const skinView = document.createElement('div');
+skinView.className = 'skin-view is-hidden';
+skinView.style.top = `${HEADER_HEIGHT}px`;
+document.body.appendChild(skinView);
+let skinViewId = null;
+
+// The skins the big view is showing right now, in order (owned, then unowned)
+function viewableSkins(champ) {
+  if (!champ) return [];
+  return [...champ.skins.map(s => ({ skin: s, owned: true })),
+    ...unownedFor(champ).map(s => ({ skin: s, owned: false }))];
+}
+
+function openSkinView(champ, skinId) {
+  const list = viewableSkins(champ);
+  const i = list.findIndex(x => x.skin.id === skinId);
+  if (i < 0) return;
+  const { skin, owned } = list[i];
+  skinViewId = skinId;
+  const equipped = owned && skin.id === champ.selectedSkinId;
+  let action = '';
+  if (!owned) action = '<span class="skin-view__state is-locked">Not owned</span>';
+  else if (equipped) action = `<span class="skin-view__state is-equipped">${EQUIP_ICON} Equipped</span>`;
+  else if (champ.canEquip) action = `<button class="skin-view__equip" data-equip="${skin.id}">${EQUIP_ICON} Equip</button>`;
+  const arrows = list.length > 1
+    ? `<button class="skin-view__nav is-prev" data-skin-nav="-1" title="Previous skin (←)">&#x2039;</button>
+       <button class="skin-view__nav is-next" data-skin-nav="1" title="Next skin (→)">&#x203A;</button>`
+    : '';
+  skinView.classList.toggle('is-unowned', !owned);
+  skinView.innerHTML = `
+    <div class="skin-view__art">${imgTag(skin.splash || skin.img, [skin.img, ...(skin.fallbacks || [])])}</div>
+    <button class="skin-view__close" data-skin-close title="Close (Esc)">&#x2715;</button>
+    ${arrows}
+    <div class="skin-view__bar">
+      ${tierGemHtml(skin, 'skin-view__gem')}
+      <div class="skin-view__text">
+        <div class="skin-view__name">${escapeHtml(skin.name)}</div>
+        <div class="skin-view__sub">${tierOf(skin) ? `${TIER_ICON[tierOf(skin)]} skin` : 'No tier'}${skin.isLegacy ? ` · ${legacyHtml(skin, 'skin-view__legacy')} Legacy` : ''} · ${i + 1} of ${list.length}</div>
+      </div>
+      ${chromaBadgeHtml(skin, champ.id, 'skin-view__chromas')}
+      ${action}
+    </div>`;
+  skinView.classList.remove('is-hidden');
+  // Same as clicking a card before: this skin is the one 3D model / Spotlight show
+  pickedSkinId = skinId;
+  pickedSkinChampId = champ.id;
+  pickedSkinName = '';
+}
+
+function closeSkinView() {
+  skinViewId = null;
+  skinView.classList.add('is-hidden');
+  skinView.innerHTML = '';
+}
+
+function stepSkinView(dir) {
+  const list = viewableSkins(lastFocusChamp);
+  const i = list.findIndex(x => x.skin.id === skinViewId);
+  if (i < 0 || list.length < 2) return;
+  openSkinView(lastFocusChamp, list[(i + dir + list.length) % list.length].skin.id);
+}
+
+async function equipFrom(btn) {
+  const skinId = Number(btn.dataset.equip);
+  btn.classList.add('is-equipping');
+  const res = await window.scoutAPI.equipSkin(skinId);
+  btn.classList.remove('is-equipping');
+  if (res && res.success) {
+    if (lastFocusChamp && lastFocusChamp.skins.some(x => x.id === skinId)) lastFocusChamp.selectedSkinId = skinId;
+    bodyEl.querySelectorAll('.is-equipped').forEach(el => el.classList.remove('is-equipped'));
+    const card = bodyEl.querySelector(`.focus-card[data-skin-id="${skinId}"], .scout-skin[data-skin-id="${skinId}"]`);
+    if (card) card.classList.add('is-equipped');
+    if (skinViewId === skinId) openSkinView(lastFocusChamp, skinId); // show "Equipped"
+  } else {
+    btn.classList.add('is-failed');
+    setTimeout(() => btn.classList.remove('is-failed'), 800);
+  }
+}
+
+skinView.addEventListener('click', (e) => {
+  const chromaBtn = e.target.closest('[data-chromas]');
+  if (chromaBtn) { openChromas(lastFocusChamp, Number(chromaBtn.dataset.chromas)); return; }
+  const equipBtn = e.target.closest('[data-equip]');
+  if (equipBtn) { equipFrom(equipBtn); return; }
+  const nav = e.target.closest('[data-skin-nav]');
+  if (nav) { stepSkinView(Number(nav.dataset.skinNav)); return; }
+  if (e.target.closest('[data-skin-close]')) closeSkinView();
+});
+document.addEventListener('keydown', (e) => {
+  if (skinViewId === null || chromaPopSkinId !== null || e.defaultPrevented) return;
+  if (e.target.closest && e.target.closest('input, textarea')) return;
+  if (e.key === 'Escape') closeSkinView();
+  else if (e.key === 'ArrowLeft') stepSkinView(-1);
+  else if (e.key === 'ArrowRight') stepSkinView(1);
+});
+
 function focusHtml(champ) {
+  lastFocusChamp = champ || null;
+  // The chroma viewer and skin view belong to the champion they were opened for
+  if (chromaPopSkinId !== null && (!champ || !findSkin(champ, chromaPopSkinId))) closeChromas();
+  if (skinViewId !== null && !viewableSkins(champ).some(x => x.skin.id === skinViewId)) closeSkinView();
   if (!champ) {
     return `<div class="focus-empty">
       <div class="focus-empty__title">Pick a champion</div>
       <div>Click a champion in the League client${currentLayout() === 'focus' ? ' or an icon above' : ' or the list'} to see your skins here.</div>
     </div>`;
   }
-  const hint = champ.canEquip ? 'Click a skin to equip it' : (champ.isMine ? 'Lock in to equip from here' : '');
+  const unowned = unownedFor(champ);
+  const missing = unownedList(champ);   // null while loading
+  // The equip hint now lives in the tooltip, to keep the header short
+  const hint = champ.noSkins ? '' : (champ.canEquip ? 'Click a skin to view it, or the check mark to equip it' : (champ.isMine ? 'Lock in to equip from here' : ''));
+  // "6 / 8 skins owned": owned in gold, total in gray. Until the total is
+  // known, just "6 skins owned". "Show unowned" only when something is missing.
+  const owned = champ.noSkins ? 0 : champ.skinCount;
+  const countHtml = missing
+    ? `<b class="focus-count__owned">${owned}</b> / ${owned + missing.length} skins owned`
+    : `<b class="focus-count__owned">${owned}</b> skin${owned === 1 ? '' : 's'} owned`;
+  const unownedBtn = missing && missing.length
+    ? `<button class="scout-chip focus-count__toggle${showUnowned ? ' is-on' : ''}" data-toggle-unowned
+        aria-pressed="${showUnowned}" title="${showUnowned ? 'Hide' : 'Also show'} the skins you don't own">Show unowned</button>`
+    : '';
   const panelOpen = guideOpenWide;
   // While the panel shows a 3D model or Spotlight, mark the skin it's showing
   const skinPanel = panelOpen && (panelMode === 'model' || panelMode === 'spotlight');
@@ -439,16 +732,30 @@ function focusHtml(champ) {
     if (s.id === champ.selectedSkinId) cls.push('is-equipped');
     if (shownSkin && s.id === shownSkin.id) cls.push('is-picked');
     return `<figure class="${cls.join(' ')}" data-skin-id="${s.id}" data-champ-id="${champ.id}" title="${escapeHtml(s.name)}">
-      <div class="focus-card__art">${imgTag(s.img, s.fallbacks)}</div>
+      <div class="focus-card__art">${imgTag(s.img, s.fallbacks)}${cardOverlaysHtml(s, champ, true)}</div>
+      <figcaption class="focus-card__name">${escapeHtml(s.name)}</figcaption>
+    </figure>`;
+  }).join('') + unowned.map(s => {
+    // Skins you don't own (toggle): dimmed with a lock; still clickable to view, 3D / Spotlight
+    const picked = shownSkin && s.id === shownSkin.id ? ' is-picked' : '';
+    return `<figure class="focus-card is-unowned${picked}" data-skin-id="${s.id}" data-champ-id="${champ.id}" title="${escapeHtml(s.name)} (not owned)">
+      <div class="focus-card__art">${imgTag(s.img, s.fallbacks)}${cardOverlaysHtml(s, champ, false)}</div>
       <figcaption class="focus-card__name">${escapeHtml(s.name)}</figcaption>
     </figure>`;
   }).join('');
+  // No skins owned: say so plainly, in the middle (no art, nothing to misread)
+  const noSkinsMsg = `You don't own any<br><b>${escapeHtml(champ.name)}</b> skins`;
+  const body = champ.noSkins && !unowned.length
+    ? `<div class="noskins-center"><div>${noSkinsMsg}</div></div>`
+    : `${champ.noSkins ? `<div class="noskins-line">You don't own any <b>${escapeHtml(champ.name)}</b> skins</div>` : ''}<div class="focus-cards">${cards}</div>`;
   return `
     <header class="focus-header">
-      <img class="focus-header__icon" src="${escapeHtml(champ.iconUrl)}" alt="" />
+      <img class="focus-header__icon${champ.noSkins ? ' is-none' : ''}" src="${escapeHtml(champ.iconUrl)}" alt="" />
       <div class="focus-header__text">
         <div class="focus-header__name">${escapeHtml(champ.name)} ${tagsFor(champ)}</div>
-        <div class="focus-header__meta">${champ.skinCount} owned skin${champ.skinCount === 1 ? '' : 's'}${hint ? ` · ${hint}` : ''}</div>
+        <div class="focus-header__meta${champ.noSkins ? ' is-none' : ''}"${hint ? ` title="${hint}"` : ''}>
+          <span class="focus-count">${countHtml}</span>${unownedBtn}
+        </div>
       </div>
       <div class="focus-actions">
         <button class="focus-guide${panelOpen && panelMode === 'guide' ? ' is-active' : ''}" data-panel="guide"
@@ -463,7 +770,7 @@ function focusHtml(champ) {
         </div>
       </div>
     </header>
-    <div class="focus-cards">${cards}</div>`;
+    ${body}`;
 }
 
 function message(text) {
@@ -516,36 +823,50 @@ function render(payload) {
   const clientPickChanged = hoverId !== lastClientPickId;
   lastClientPickId = hoverId;
 
-  const shown = searchQuery
-    ? champions.filter(c => c.name.toLowerCase().includes(searchQuery))
-    : champions;
+  const noSkin = payload.noSkinChamps || [];
+  const matches = c => !searchQuery || c.name.toLowerCase().includes(searchQuery);
+  const shown = champions.filter(matches);
+  const shownNoSkin = noSkin.filter(matches);
 
-  // Which champion gets the big view
-  const byId = id => champions.find(c => c.id === id);
+  // Which champion gets the big view (including ones you own no skins for)
+  const byId = id => champions.find(c => c.id === id) || noSkin.find(c => c.id === id);
   const selected = byId(userPickId) || byId(hoverId) || champions.find(c => c.canEquip) || null;
   const selectedId = selected ? selected.id : 0;
 
   // List (small layout + Split)
   let listHtml;
-  if (champions.length === 0) {
-    listHtml = message(mode === 'bench'
-      ? 'No skins on your champion, the bench, or your teammates right now.'
-      : 'None of your pickable champions have skins.');
-  } else if (shown.length === 0) {
-    listHtml = message(`No champions matching "${searchInput.value.trim()}".`);
+  const openIds = new Set([...listEl.querySelectorAll('.scout-row.is-open:not(.is-hovered)')]
+    .map(r => Number(r.dataset.id)));
+  const row = (c, extra = {}) => rowHtml(c, { selectedId, openIds, layout, ...extra });
+  const noSkinSection = (list) => list.length
+    ? `<div class="scout-section scout-section--none">No skins (${list.length})</div>` +
+      list.map(c => row(c, { compact: true })).join('')
+    : '';
+  if (mode === 'bench') {
+    // ARAM: you, the bench, teammates — then a gray "No skins" section.
+    // Your own champion always shows, even with no skins.
+    const myNoSkin = shownNoSkin.filter(c => c.isMine);
+    listHtml = ARAM_SECTIONS.map(({ group, label }) => {
+      const champs = shown.filter(c => groupOf(c) === group);
+      const extraMine = group === 'you' ? myNoSkin.map(c => row(c, { note: 'No skins owned' })).join('') : '';
+      if (!champs.length && !extraMine) return '';
+      return `<div class="scout-section scout-section--${group}">${label}</div>` + extraMine + champs.map(c => row(c)).join('');
+    }).join('') + noSkinSection(shownNoSkin.filter(c => !c.isMine));
+    if (!listHtml) listHtml = message(searchQuery ? `No champions matching "${searchInput.value.trim()}".` : 'No champions yet.');
   } else {
-    const openIds = new Set([...listEl.querySelectorAll('.scout-row.is-open:not(.is-hovered)')]
-      .map(r => Number(r.dataset.id)));
-    const row = c => rowHtml(c, { selectedId, openIds, layout });
-    if (mode === 'bench') {
-      // ARAM: separate labeled sections for you, the bench and your teammates
-      listHtml = ARAM_SECTIONS.map(({ group, label }) => {
-        const champs = shown.filter(c => groupOf(c) === group);
-        if (!champs.length) return '';
-        return `<div class="scout-section scout-section--${group}">${label}</div>` + champs.map(row).join('');
-      }).join('');
+    // Clicked a champion you own no skins for: show it at the top, grayed out
+    // (unless the "No skin champs" list below already shows it)
+    const temp = selected && selected.noSkins && !showNoSkinChamps
+      ? `<div class="temp-label">You clicked</div>${row(selected, { note: 'No skins owned' })}<div class="temp-gap"></div>`
+      : '';
+    const ownedRows = shown.map(c => row(c)).join('');
+    const extra = showNoSkinChamps ? noSkinSection(shownNoSkin) : '';
+    if (!ownedRows && !extra && !temp) {
+      listHtml = message(searchQuery
+        ? `No champions matching "${searchInput.value.trim()}".`
+        : 'None of your pickable champions have skins.');
     } else {
-      listHtml = shown.map(row).join('');
+      listHtml = temp + (ownedRows || (temp ? '' : message('None of your pickable champions have skins.'))) + extra;
     }
   }
   const scrollTop = listEl.scrollTop;
@@ -554,7 +875,8 @@ function render(payload) {
   // Icon strip (Focus)
   const stripOrder = mode === 'bench'
     ? ['you', 'bench', 'team'].flatMap(g => shown.filter(c => groupOf(c) === g))
-    : shown;
+      .concat(shownNoSkin) // ARAM: no-skin champions at the end, grayed
+    : shown.concat(showNoSkinChamps ? shownNoSkin : []);
   setHtml(stripEl, 'strip', layout === 'focus' ? stripHtml(stripOrder, selectedId) : '');
 
   // Big view (Split + Focus)
@@ -577,7 +899,8 @@ function render(payload) {
 
 // If an image fails to load, try its backup addresses one by one.
 // (Image errors don't "bubble up" like clicks do, so listen in the capture phase.)
-bodyEl.addEventListener('error', (e) => {
+// Whole page, so the skin view and chroma pop-up get backups too.
+document.addEventListener('error', (e) => {
   const img = e.target;
   if (!(img instanceof HTMLImageElement) || !img.dataset.fallbacks) return;
   let fallbacks = [];
@@ -590,6 +913,19 @@ bodyEl.addEventListener('error', (e) => {
 bodyEl.addEventListener('click', async (e) => {
   // "Build guide" buttons: open Skill Capped for that champion (and your role)
   // Build guide / Wiki / 3D model / Spotlight buttons: open (or close) the panel
+  // "Show unowned" next to the skin count: same setting as the footer button
+  if (e.target.closest('[data-toggle-unowned]')) {
+    flipUnowned();
+    return;
+  }
+  // Chromas button under a skin card: open the chroma viewer (doesn't equip)
+  const chromaBtn = e.target.closest('[data-chromas]');
+  if (chromaBtn) {
+    const champId = Number(chromaBtn.dataset.champId);
+    const champ = lastFocusChamp && lastFocusChamp.id === champId ? lastFocusChamp : null;
+    openChromas(champ, Number(chromaBtn.dataset.chromas));
+    return;
+  }
   const panelBtn = e.target.closest('[data-panel]');
   if (panelBtn) {
     togglePanel(panelBtn.dataset.panel);
@@ -599,32 +935,29 @@ bodyEl.addEventListener('click', async (e) => {
   const guideBtn = e.target.closest('[data-guide]');
   if (guideBtn) {
     userPickId = Number(guideBtn.dataset.id);
+    inGameChamp = null; // you picked a champion: the panel follows it
     panelMode = 'guide';
     setGuideOpen(true);
     return;
   }
-  // Clicking a big skin card picks it for the 3D model / Spotlight panel
+  // Check-mark button on a big card (or the skin view): equip that skin
+  const equipBtn = e.target.closest('[data-equip]');
+  if (equipBtn) {
+    equipFrom(equipBtn);
+    return;
+  }
+  // Clicking a big skin card: show it full-window (and pick it for 3D / Spotlight)
   const card = e.target.closest('.focus-card');
   if (card) {
-    pickedSkinId = Number(card.dataset.skinId);
-    pickedSkinChampId = Number(card.dataset.champId);
-    pickedSkinName = '';
+    openSkinView(lastFocusChamp, Number(card.dataset.skinId));
     if (guideVisible() && (panelMode === 'model' || panelMode === 'spotlight') && lastPayload) render(lastPayload);
+    return;
   }
-  // Equip a skin (small thumbnails or big cards)
-  const skinEl = e.target.closest('.scout-skin.can-equip, .focus-card.can-equip');
+  // Small layout thumbnails: click to equip (unchanged)
+  const skinEl = e.target.closest('.scout-skin.can-equip');
   if (skinEl) {
-    const skinId = Number(skinEl.dataset.skinId);
-    skinEl.classList.add('is-equipping');
-    const res = await window.scoutAPI.equipSkin(skinId);
-    skinEl.classList.remove('is-equipping');
-    if (res && res.success) {
-      bodyEl.querySelectorAll('.is-equipped').forEach(el => el.classList.remove('is-equipped'));
-      skinEl.classList.add('is-equipped');
-    } else {
-      skinEl.classList.add('is-failed');
-      setTimeout(() => skinEl.classList.remove('is-failed'), 800);
-    }
+    skinEl.dataset.equip = skinEl.dataset.skinId;
+    equipFrom(skinEl);
     return;
   }
   // Pick a champion for the big view (list rows in Split, icons in Focus)
@@ -632,6 +965,7 @@ bodyEl.addEventListener('click', async (e) => {
     (currentLayout() !== 'narrow' && e.target.closest('.scout-row'));
   if (pick) {
     userPickId = Number(pick.dataset.id);
+    inGameChamp = null; // you picked a champion: the panel follows it
     if (lastPayload) render(lastPayload);
   }
 });
@@ -657,7 +991,7 @@ listEl.addEventListener('mouseleave', () => {
 // don't start a drag. You have to move 3 pixels first, so plain clicks and
 // double-clicks still work normally.
 const NOT_DRAGGABLE = 'button, input, a, textarea, select, webview, .scout-row, .focus-card,' +
-  '.scout-skin, .scout-strip__item, .scout-layout-toggle, .scout-guide__view, .resize-grip';
+  '.scout-skin, .scout-strip__item, .scout-layout-toggle, .scout-guide__view, .resize-grip, .chroma-pop, .skin-view';
 let resizing = false;
 
 // Resize handles on the left, right and bottom edges. Listening on the whole
@@ -722,4 +1056,15 @@ window.scoutAPI.onGameStart(({ champ }) => {
   render(lastPayload || { state: 'ready', champions: [], availableCount: 0, mode: 'draft', hoverId: 0 });
 });
 
-window.scoutAPI.onUpdate(render);
+// New information from the app (champ select, preview, …) means the game is
+// over: stop pinning the panel to the champion you played
+window.scoutAPI.onUpdate((payload) => {
+  if (inGameChamp) {
+    // Coming back from a game: unpin the panel and show the skins again
+    // (the game had switched on "Guide only")
+    inGameChamp = null;
+    guideOnly = false;
+    panelMode = 'guide';
+  }
+  render(payload);
+});

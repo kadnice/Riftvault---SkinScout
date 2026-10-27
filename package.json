@@ -1,6 +1,6 @@
 {
   "name": "riftvault",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "description": "RiftVault — A League Skin Collection Viewer",
   "main": "main.js",
   "scripts": {
@@ -9,11 +9,33 @@
     "build": "electron-builder --win --x64"
   },
   "build": {
-    "appId": "com.arjun.riftvault",
+    "appId": "com.kadnice.riftvault-skinscout",
     "productName": "RiftVault",
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!docs/**",
+      "!.github/**",
+      "!*.md",
+      "!scrape.py",
+      "!*.log",
+      "!*.vbs",
+      "!*.bundle"
+    ],
     "win": {
-      "target": "portable",
+      "target": [
+        "nsis"
+      ],
       "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "RiftVault",
+      "runAfterFinish": true,
+      "artifactName": "RiftVault-Setup-${version}.${ext}"
     },
     "directories": {
       "output": "dist"

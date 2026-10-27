@@ -599,9 +599,22 @@ body.layout-focus .scout-strip {
 
 .focus-header__meta {
   margin-top: 4px;
-  font-size: 13px;
-  color: var(--gold);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
 }
+
+/* "6 / 8 skins owned": owned number in gold, the rest in gray */
+.focus-count {
+  font-size: 16px;
+  font-weight: 500;
+  color: #7b8a9e;
+  white-space: nowrap;
+}
+
+.focus-count__owned { font-weight: 600; color: #f0c860; }
+.focus-header__meta.is-none .focus-count__owned { color: var(--none); }
 
 /* Card grid: column count and card width are set by fitFocusCards() so all
    skins fit without scrolling */
@@ -648,6 +661,104 @@ body.layout-focus .scout-strip {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ─── RiftVault-style overlays on the skin art ─────────────────────────────── */
+.focus-card__art { position: relative; }
+
+/* Bottom center: tier gem (Epic, Legendary, Mythic, ...) */
+.focus-card__gem {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  width: clamp(26px, calc(var(--card-w) * 0.16), 40px);
+  height: clamp(26px, calc(var(--card-w) * 0.16), 40px);
+  pointer-events: none;
+}
+
+.focus-card__gem img,
+.skin-view__gem img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+/* Each tier glows in its own color, like RiftVault */
+.is-transcendent img { filter: drop-shadow(0 0 6px #2ec4f6); }
+.is-exalted img { filter: drop-shadow(0 0 6px #50c878); }
+.is-mythic img { filter: drop-shadow(0 0 6px #ee4fa0); }
+.is-ultimate img { filter: drop-shadow(0 0 6px #ef4a60); }
+.is-legendary img { filter: drop-shadow(0 0 6px #ff8c00); }
+.is-epic img { filter: drop-shadow(0 0 6px #4aa8d8); }
+
+/* Top right: chroma badge (number = chromas you own); click to view them all */
+.focus-card__chromas,
+.skin-view__chromas {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+
+.focus-card__chromas:hover,
+.skin-view__chromas:hover { transform: scale(1.12); }
+
+.focus-card__chromas img,
+.skin-view__chromas img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7));
+}
+
+.focus-card__chromas span,
+.skin-view__chromas span {
+  position: relative;
+  color: #fff;
+  font: 700 12px 'Inter', sans-serif;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* Has chromas, but you own none of them: dimmer badge */
+.is-none-owned img { filter: grayscale(0.8) brightness(0.75) drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7)); }
+
+/* Top left: equip (check mark) — only when equipping is possible */
+.focus-card__apply {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--gold-dim);
+  border-radius: 50%;
+  background: rgba(1, 10, 19, 0.82);
+  color: var(--gold-light);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.focus-card:hover .focus-card__apply { opacity: 1; }
+.focus-card__apply:hover { background: var(--gold); color: #010a13; border-color: var(--gold); }
+.focus-card.is-equipped .focus-card__apply { opacity: 1; background: var(--gold); color: #010a13; border-color: var(--gold); }
+.focus-card__apply.is-equipping { opacity: 0.5; }
+.focus-card__apply.is-failed { background: #a33; border-color: #a33; }
+
+/* Every big card can be clicked to view it */
+.focus-card:hover .focus-card__art {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--gold-dim);
 }
 
 .focus-card--transcendent .focus-card__art { border-top-color: var(--r-transcendent); }
@@ -1075,4 +1186,413 @@ body.guide-only .scout-guide {
 /* The panel has two viewers (normal + YouTube-safe); only one shows at a time */
 .scout-guide__view.is-hidden {
   display: none;
+}
+
+/* ─── "No skins" states: gray = no skins owned (gold = skins) ─── */
+:root {
+  --none: #7d8899;
+  --none-dim: #3c4654;
+}
+
+.scout-row.is-noskins {
+  background: #0b111c;
+  box-shadow: inset 4px 0 0 var(--none-dim);
+}
+
+.scout-row.is-noskins.is-hovered {
+  border-color: var(--none);
+  box-shadow: inset 4px 0 0 var(--none), 0 0 10px rgba(140, 150, 165, 0.18);
+}
+
+.scout-row.is-noskins .scout-row__icon {
+  filter: saturate(0.35) brightness(0.85);
+  border-color: var(--none-dim);
+}
+
+.scout-row.is-noskins .scout-row__name {
+  color: #b9c0ca;
+}
+
+.scout-row__count.is-zero {
+  border-color: var(--none);
+  background: #121821;
+  color: #9aa4b2;
+}
+
+.noskins-note {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--none);
+}
+
+.scout-section--none { color: var(--none); }
+
+.temp-label {
+  padding: 2px 4px 4px;
+  font: 700 10.5px 'Inter', sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--none);
+}
+
+.temp-gap { height: 6px; flex-shrink: 0; }
+
+/* Compact rows for the "No skins" section (also in ARAM) */
+.scout-row.is-compact .scout-row__main { padding: 4px 10px; gap: 10px; }
+.scout-row.is-compact .scout-row__icon,
+body.mode-aram .scout-row.is-compact .scout-row__icon { width: 30px; height: 30px; }
+.scout-row.is-compact .scout-row__name,
+body.mode-aram .scout-row.is-compact .scout-row__name { font-size: 13.5px; font-weight: 500; }
+.scout-row.is-compact .scout-row__count,
+body.mode-aram .scout-row.is-compact .scout-row__count {
+  min-width: 24px; height: 24px; line-height: 22px; font-size: 12px; border-radius: 12px;
+}
+
+/* Big view: no skins owned */
+.focus-header__meta.is-none { color: var(--none); }
+.focus-header__icon.is-none { border-color: var(--none); box-shadow: none; filter: saturate(0.5); }
+
+.noskins-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 40px;
+  text-align: center;
+  font: 500 26px 'Inter', sans-serif;
+  line-height: 1.35;
+  color: #8f99a7;
+}
+
+.noskins-center b {
+  font-family: 'Cinzel', serif;
+  font-size: 30px;
+  font-weight: 700;
+  color: #c9ced6;
+}
+
+.noskins-line {
+  flex-shrink: 0;
+  margin: 0 0 12px;
+  text-align: center;
+  font-size: 15px;
+  color: #8f99a7;
+}
+
+.noskins-line b { color: #c9ced6; }
+
+/* Skins you don't own (toggle): dimmed, with a lock */
+.focus-card.is-unowned .focus-card__art {
+  position: relative;
+  border-top-color: var(--none-dim);
+}
+
+.focus-card.is-unowned .focus-card__art img {
+  filter: grayscale(0.85) brightness(0.5);
+}
+
+.focus-card.is-unowned .focus-card__name { color: var(--none); }
+
+.focus-card__lock {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(1, 10, 19, 0.8) center / 12px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%23aab3bf' d='M5 7V5a3 3 0 0 1 6 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm1.5 0h3V5a1.5 1.5 0 0 0-3 0z'/%3E%3C/svg%3E");
+  border: 1px solid var(--none-dim);
+}
+
+/* Focus layout icon strip: no-skin champions grayed */
+.scout-strip__item.is-noskins img { filter: saturate(0.3) brightness(0.8); }
+.scout-strip__item.is-noskins .scout-strip__count { border-color: var(--none); color: #9aa4b2; background: #121821; }
+
+/* ARAM: bigger, clearer section labels */
+body.mode-aram .scout-section {
+  margin-top: 10px;
+  padding: 4px 4px 5px;
+  font-size: 14.5px;
+  letter-spacing: 0.07em;
+}
+
+body.mode-aram .scout-section:first-child { margin-top: 0; }
+
+/* ─── Footer toggles ─── */
+.scout-footer__toggles {
+  display: flex;
+  gap: 5px;
+}
+
+.scout-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: none;
+  color: var(--text);
+  font: 500 11px 'Inter', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scout-chip:hover { border-color: var(--gold-dim); color: var(--text-bright); }
+
+.scout-chip.is-on {
+  border-color: var(--gold);
+  background: rgba(200, 155, 60, 0.18);
+  color: var(--gold-light);
+}
+
+.scout-chip.is-on::before { content: '✓ '; }
+
+.scout-footer.is-searching .scout-footer__toggles { display: none; }
+
+/* Small window: no room for the "Open full collection" link next to the toggles */
+body.layout-narrow .scout-footer__hint { display: none; }
+
+.focus-card.is-unowned .focus-card__gem { opacity: 0.55; }
+
+/* ─── Chroma viewer (pop-up over the skins) ─────────────────────────────── */
+.chroma-pop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(1, 6, 12, 0.72);
+}
+
+.chroma-pop.is-hidden { display: none; }
+
+.chroma-pop__box {
+  width: min(720px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--gold-dim);
+  border-radius: 6px;
+  background: #0a121c;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.chroma-pop__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.chroma-pop__head > img { width: 26px; height: 26px; object-fit: contain; }
+
+.chroma-pop__title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-bright);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.chroma-pop__title span {
+  display: block;
+  margin-top: 2px;
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chroma-pop__close {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.chroma-pop__close:hover { border-color: var(--gold); color: var(--text-bright); }
+
+.chroma-pop__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.chroma-pop__item { margin: 0; text-align: center; }
+
+.chroma-pop__art {
+  position: relative;
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: radial-gradient(circle at 50% 40%, #1b2735, #070d14);
+}
+
+.chroma-pop__art img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+.chroma-pop__item:not(.is-locked) .chroma-pop__art { border-color: var(--gold-dim); }
+.chroma-pop__item.is-locked .chroma-pop__art img { filter: grayscale(0.6) brightness(0.5); }
+
+.chroma-pop__item figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding-top: 6px;
+  color: var(--text-bright);
+  font-size: 12.5px;
+}
+
+.chroma-pop__item.is-locked figcaption { color: var(--none); }
+
+.chroma-pop__swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+/* ─── Full-window skin view (click a skin card) ─────────────────────────── */
+.skin-view {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;           /* top is set in scout.js: just under the title bar */
+  z-index: 40;         /* the chroma pop-up (50) opens on top of it */
+  background: #000;
+  overflow: hidden;
+}
+
+.skin-view.is-hidden { display: none; }
+
+.skin-view__art,
+.skin-view__art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.skin-view__art img { object-fit: cover; object-position: center 25%; }
+.skin-view.is-unowned .skin-view__art img { filter: grayscale(0.6) brightness(0.6); }
+
+.skin-view__close,
+.skin-view__nav {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--gold-dim);
+  background: rgba(1, 10, 19, 0.7);
+  color: var(--gold-light);
+  cursor: pointer;
+}
+
+.skin-view__close { top: 12px; right: 12px; width: 34px; height: 34px; border-radius: 4px; font-size: 15px; }
+
+.skin-view__nav {
+  top: 50%;
+  width: 40px;
+  height: 64px;
+  margin-top: -32px;
+  border-radius: 4px;
+  font-size: 34px;
+  line-height: 1;
+}
+
+.skin-view__nav.is-prev { left: 12px; }
+.skin-view__nav.is-next { right: 12px; }
+
+.skin-view__close:hover,
+.skin-view__nav:hover { border-color: var(--gold); background: rgba(200, 155, 60, 0.25); }
+
+.skin-view__bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 50px 22px 18px;
+  background: linear-gradient(to top, rgba(1, 6, 12, 0.95) 30%, rgba(1, 6, 12, 0));
+}
+
+.skin-view__gem { flex: none; width: 46px; height: 46px; }
+
+.skin-view__text { flex: 1; min-width: 0; }
+
+.skin-view__name {
+  color: var(--gold-light);
+  font-family: 'Cinzel', serif;
+  font-size: clamp(20px, 3vw, 32px);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skin-view__sub { margin-top: 2px; color: #a9b4c2; font-size: 13px; }
+
+.skin-view__chromas { position: relative; top: auto; right: auto; flex: none; width: 42px; height: 42px; }
+.skin-view__chromas span { font-size: 14px; }
+
+.skin-view__equip,
+.skin-view__state {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border-radius: 4px;
+  font: 600 14px 'Inter', sans-serif;
+}
+
+.skin-view__equip {
+  border: 1px solid var(--gold);
+  background: rgba(200, 155, 60, 0.2);
+  color: var(--gold-light);
+  cursor: pointer;
+}
+
+.skin-view__equip:hover { background: var(--gold); color: #010a13; }
+.skin-view__equip.is-equipping { opacity: 0.6; }
+.skin-view__equip.is-failed { border-color: #a33; background: rgba(170, 51, 51, 0.4); }
+.skin-view__state.is-equipped { border: 1px solid var(--gold); color: var(--gold); }
+.skin-view__state.is-locked { border: 1px solid var(--none-dim); color: var(--none); }
+
+/* Bottom-left: Legacy Vault emblem */
+.focus-card__legacy {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  width: clamp(22px, calc(var(--card-w) * 0.13), 32px);
+  height: clamp(22px, calc(var(--card-w) * 0.13), 32px);
+  pointer-events: auto;
+}
+
+.focus-card__legacy img,
+.skin-view__legacy img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.8));
+}
+
+.skin-view__legacy {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
 }

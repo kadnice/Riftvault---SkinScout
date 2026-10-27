@@ -4,6 +4,22 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const scout = require('./scout-main');
+
+// Installed version (no terminal): write the messages that would appear in the
+// terminal to %APPDATA%\RiftVault\riftvault.log instead, for troubleshooting.
+if (app.isPackaged) {
+  try {
+    const util = require('util');
+    const logStream = fs.createWriteStream(path.join(app.getPath('userData'), 'riftvault.log'), { flags: 'w' });
+    for (const level of ['log', 'warn', 'error']) {
+      const original = console[level].bind(console);
+      console[level] = (...args) => {
+        logStream.write(`${util.format(...args)}\n`);
+        original(...args);
+      };
+    }
+  } catch (e) { /* logging is optional */ }
+}
 let scoutDiskCache = null;
 let mainWindow = null; // the main RiftVault window (created in createWindow)
 let trayMenu = null;   // the tray icon's right-click menu
@@ -280,7 +296,10 @@ async function fetchCDRarityMap(patch) {
       kepic: 'epic',
       ktranscendent: 'transcendent',
       kexalted: 'exalted',
-      krare: 'epic',
+      // "Rare" is Riot's label for 975 RP skins (e.g. Arcane Undercity Vi,
+      // Victorious Maokai). They have no gem in the League client, so they're
+      // Standard, not Epic (Epic = 1350 RP).
+      krare: 'standard',
       kcommon: 'standard',
       knorarity: 'standard',
     };
@@ -343,7 +362,8 @@ function detectRarity(skin, cdMap) {
   if (gemPath) {
     if (gemPath.includes('transcendent')) return 'transcendent';
     if (gemPath.includes('ultimate')) return 'ultimate';
-    if (gemPath.includes('mythic') || gemPath.includes('exalted')) return 'mythic';
+    if (gemPath.includes('exalted')) return 'exalted';
+    if (gemPath.includes('mythic')) return 'mythic';
     if (gemPath.includes('legendary')) return 'legendary';
     if (gemPath.includes('epic')) return 'epic';
   }
@@ -351,8 +371,9 @@ function detectRarity(skin, cdMap) {
   // 3. LCU rarity enum
   if (skin.rarity && skin.rarity !== 'kNoRarity') {
     const map = {
+      kTranscendent: 'transcendent', kExalted: 'exalted',
       kUltimate: 'ultimate', kMythic: 'mythic', kLegendary: 'legendary',
-      kEpic: 'epic', kRare: 'epic', kCommon: 'standard',
+      kEpic: 'epic', kRare: 'standard', kCommon: 'standard',
     };
     return map[skin.rarity] || 'standard';
   }
@@ -498,8 +519,12 @@ async function buildOwnedSkins(creds) {
       skinNum,
       owned,
       isBase: skinNum === 0,
-      isLegacy: !!cdEntry.isLegacy,
+      // Legacy Vault: CommunityDragon's flag, or the League client's own
+      isLegacy: !!cdEntry.isLegacy || skin.isLegacy === true,
       rarity,
+      // The gem picture the League client itself uses for this skin ('' = the
+      // client shows no gem). null when the client didn't say.
+      clientGemPath: typeof skin.rarityGemPath === 'string' ? skin.rarityGemPath : null,
       chromas,
       mastery,
       splashUrl: `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${champ.id}_${skinNum}.jpg`,
@@ -638,6 +663,7 @@ function createWindow() {
     },
   });
   ipcMain.on('scout-dismiss', () => scout.dismiss());
+  ipcMain.handle('scout-unowned-skins', (event, champId) => scout.unownedSkins(Number(champId)));
   ipcMain.on('scout-guide-mode', (event, keepOpen) => scout.setKeepOpenForGuide(keepOpen));
   // Skin Scout's "Build guide" button: open Skill Capped in a RiftVault tab
   ipcMain.on('scout-open-guide', (event, championKey, role) => {
