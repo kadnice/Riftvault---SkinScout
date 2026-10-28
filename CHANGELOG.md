@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.4.3] - 2026-10-27
+
+### Fixed
+- **Skin Scout opened tiny (310 × 520) with an overlapping title bar.** It now opens at a standard 1100 × 740, centered (smaller on small monitors); windows saved smaller than the new minimum (460 × 240) reset to that size. The title bar no longer overlaps: the toggles use short labels ("No-skin", "Unowned") on narrow windows.
+- **Pre-rework skin art.** Skin portraits and splash art now come from the current game files first, so champions with visual updates show their new art (e.g. Fiddlesticks: Spectral, Union Jack, Surprise Party). Data Dragon, which still serves some pre-rework art, is now only a backup. Fixes RiftVault's main window too.
+- **The full-window splash view covered the Wiki / 3D model / Spotlight buttons.** It's switched off.
+- **Skin pictures could be dragged out as a ghost copy** when the mouse moved slightly during a click. Pictures can no longer be dragged; they're still clickable.
+
+### Added
+- **Skin info card:** click a skin portrait to open a card beside it with its splash art, tier, name, RP cost, Legacy status, chromas owned, buttons for **Build guide · Spotlight · 3D model · Wiki** (they open in the side panel, for that skin) and an **Equip** button. Close with ✕, Esc or a click outside it.
+
+### Changed
+- **Clicking a skin portrait selects it, equips it and opens its info card.** The selected skin keeps a teal outline (gold = equipped, cream = mouse over) and is the one the 3D model and Spotlight buttons show.
+- **"No-skin champs" and "Unowned skins" toggles moved to the title bar.**
+- **Bigger skin portraits, natural shape.** The champion sidebar is narrower (280 → 222 px; 272 px in ARAM) and fits the names closely; the book button only takes room on mouse-over. Thinner margins and gaps around the skins. The freed space makes portraits about 10% bigger when the window's width is the limit.
+- **Top-right buttons reordered** to match the info card: Build guide on top, then Spotlight · 3D model · Wiki.
+- **Search is always visible** at the bottom, as a bigger box (taller, wider, larger text). Esc clears it.
+- **Search by skin or skin line.** Typing a skin or skin line (e.g. "demon cursed", "star guardian") lists every champion with a matching skin, with the skin's name under theirs. Enter on a full skin name (e.g. "demon cursed vayne") opens that champion with the skin selected and its info card open (turning on "Unowned skins" if you don't own it).
+- **Skin-line search splits owned from not owned.** Searching e.g. "high noon": champions you own a High Noon skin for are listed and highlighted in teal with the skin name; champions whose High Noon skin you don't own move to the gray "No skins" section. Skin matching starts at 3 letters.
+- **Skin-line search results are sorted alphabetically in two groups:** "Owned" (you own a matching skin, teal) and "Not owned" (gray).
+- **"No-skin champs" now applies while searching.** Off: the gray "No skins" / "Not owned" group is hidden and a short note says how many are hidden. On: they show.
+- **Click a skin-search result to open that skin.** Clicking e.g. Twitch under "high noon" opens Twitch's page with High Noon Twitch selected and its info card open; the search stays so you can keep going down the list.
+- **Press Enter in the search box to open that champion's page** (best match; capitals and punctuation don't matter, so "kaisa" finds Kai'Sa). The box shakes red if nothing matches.
+
+---
+
 ## [0.4.2] - 2026-10-26
 
 Bug fixes and polish for Skin Scout's skin cards and full-window skin view.

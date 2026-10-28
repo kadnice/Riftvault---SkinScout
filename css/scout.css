@@ -169,10 +169,19 @@ body.is-collapsed .scout-footer {
 }
 
 /* Split */
+/* Sidebar sized to fit the names (was 280px, mostly empty); the space it
+   frees goes to the skin portraits */
 body.layout-split .scout-list {
-  flex: 0 0 280px;
+  flex: 0 0 222px;
   border-right: 1px solid var(--line);
 }
+
+/* The guide (book) button only takes up room while it's showing:
+   on mouse-over and on the selected champion */
+body.layout-split .scout-row__guide { display: none; }
+body.layout-split .scout-row:hover .scout-row__guide,
+body.layout-split .scout-row.is-hovered .scout-row__guide { display: flex; }
+body.layout-split .scout-row__main { gap: 9px; }
 
 body.layout-split .scout-row {
   cursor: pointer;
@@ -186,7 +195,7 @@ body.layout-focus .scout-focus {
   min-width: 0;
   min-height: 0; /* stay within the window so the card sizing can measure it */
   overflow: hidden;
-  padding: 14px 22px 12px;
+  padding: 14px 14px 12px; /* thinner side margins: more room for skins */
   background: radial-gradient(ellipse at 50% 0%, rgba(200, 155, 60, 0.07), transparent 60%);
 }
 
@@ -622,7 +631,7 @@ body.layout-focus .scout-strip {
   flex: 1;
   min-height: 0;
   display: grid;
-  gap: 14px;
+  gap: 10px; /* keep in sync with GAP in fitFocusCards() */
   justify-content: center;
   align-content: center;
   --card-w: 200px;
@@ -915,48 +924,50 @@ body.layout-focus .scout-layout-toggle {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  padding: 6px 10px;
+  min-height: 52px; /* room for the bigger search box */
+  padding: 8px 12px;
   border-top: 1px solid var(--line);
   font-size: 10.5px;
 }
 
-.scout-footer__search-btn {
+/* Search: always visible, tall and easy to type in */
+.scout-search {
+  flex: 0 1 420px;
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
+  gap: 9px;
+  height: 36px;
+  padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 4px;
-  background: none;
-  color: var(--text);
-  cursor: pointer;
-  flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--bg-row);
+  color: #8f9aa8;
+  cursor: text;
 }
 
-.scout-footer__search-btn:hover,
-.scout-footer.is-searching .scout-footer__search-btn {
-  border-color: var(--gold);
-  color: var(--gold-light);
-}
+.scout-search svg { flex: none; }
+.scout-search:focus-within { border-color: var(--gold); color: var(--gold-light); }
 
-.scout-footer__input {
-  display: none;
+.scout-search__input {
   flex: 1;
   min-width: 0;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--bg-row);
+  height: 100%;
+  border: none;
+  background: none;
   color: var(--text-bright);
-  font: inherit;
-  font-size: 12px;
+  font: 15px 'Inter', sans-serif;
   outline: none;
 }
 
-.scout-footer__input:focus {
-  border-color: var(--gold);
+.scout-search__input::placeholder { color: #6f7b8a; }
+
+/* Enter with no matching champion: a short red shake */
+.scout-search.is-miss { animation: search-miss 0.45s; border-color: #c0392b; }
+@keyframes search-miss {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
 }
 
 .scout-footer__hint {
@@ -969,13 +980,6 @@ body.layout-focus .scout-layout-toggle {
   color: var(--gold-light);
 }
 
-.scout-footer.is-searching .scout-footer__input {
-  display: block;
-}
-
-.scout-footer.is-searching .scout-footer__hint {
-  display: none;
-}
 
 /* ─── Resize handles (left, right, bottom, bottom corners; never the top) ─── */
 .resize-grip {
@@ -1104,8 +1108,9 @@ body.mode-aram .scout-row .scout-tag--team {
   display: none;
 }
 
+/* ARAM rows have bigger portraits and names: a slightly wider sidebar */
 body.mode-aram.layout-split .scout-list {
-  flex-basis: 300px;
+  flex-basis: 272px;
 }
 
 /* ─── "Guide only": the guide fills Skin Scout, skins hidden ─── */
@@ -1337,11 +1342,15 @@ body.mode-aram .scout-section {
 
 body.mode-aram .scout-section:first-child { margin-top: 0; }
 
-/* ─── Footer toggles ─── */
-.scout-footer__toggles {
+/* ─── Toggles in the title bar ─── */
+.scout-header__toggles {
   display: flex;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
+  margin-right: 10px;
 }
+
+.scout-header__toggles .scout-chip { padding: 4px 11px; font-size: 12px; }
 
 .scout-chip {
   padding: 3px 9px;
@@ -1364,9 +1373,9 @@ body.mode-aram .scout-section:first-child { margin-top: 0; }
 
 .scout-chip.is-on::before { content: '✓ '; }
 
-.scout-footer.is-searching .scout-footer__toggles { display: none; }
-
-/* Small window: no room for the "Open full collection" link next to the toggles */
+/* Small window: shorter toggles; no room for "Open full collection" */
+body.layout-narrow .scout-header__toggles { margin-right: 4px; gap: 4px; }
+body.layout-narrow .scout-header__toggles .scout-chip { padding: 3px 7px; font-size: 10.5px; }
 body.layout-narrow .scout-footer__hint { display: none; }
 
 .focus-card.is-unowned .focus-card__gem { opacity: 0.55; }
@@ -1693,4 +1702,201 @@ body.layout-narrow .scout-footer__hint { display: none; }
   height: 1.25em;
   margin-right: 6px;
   vertical-align: -0.25em;
+}
+
+/* ─── Selected skin (single click): teal outline, stays until you pick another.
+   Gold still means "equipped", cream means "mouse over". ─── */
+.focus-card.is-selected .focus-card__art {
+  outline: 3px solid #0ac8b9;
+  outline-offset: 3px;
+  box-shadow: 0 0 18px rgba(10, 200, 185, 0.45);
+}
+
+.focus-card.is-selected .focus-card__name { color: #7ee8de; }
+
+/* ─── Skin info card (click a skin) ─── */
+.info-dim {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  background: rgba(1, 6, 12, 0.45);
+}
+
+.info-card {
+  position: fixed;
+  z-index: 45;
+  width: min(540px, calc(100vw - 24px));
+  border: 1px solid var(--gold);
+  border-radius: 8px;
+  background: #0a121c;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+
+.info-dim.is-hidden,
+.info-card.is-hidden { display: none; }
+
+.info-card__art {
+  position: relative;
+  aspect-ratio: 1215 / 640;
+  background: #000;
+}
+
+.info-card__art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.info-card.is-unowned .info-card__art img { filter: grayscale(0.6) brightness(0.6); }
+
+.info-card__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--gold);
+  border-radius: 50%;
+  background: rgba(1, 10, 19, 0.88);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.info-card__close:hover { background: var(--gold); color: #010a13; }
+
+.info-card__body { padding: 18px 20px 20px; }
+
+.info-card__name {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--gold-light);
+  font-family: 'Cinzel', serif;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.info-card__gem { flex: none; width: 46px; height: 46px; }
+.info-card__gem img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+.info-card__info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  color: #c3ccd7;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.info-card__dot { margin: 0 10px; color: #6b7a8c; }
+
+.info-card__price { display: inline-flex; align-items: center; gap: 6px; color: var(--gold-light); font-weight: 600; }
+.info-card__price img { width: 22px; height: 22px; object-fit: contain; }
+.info-card__price.is-special { color: #c9b27c; font-weight: 500; font-style: italic; }
+
+.info-card__legacy { display: inline-block; width: 22px; height: 22px; margin-right: 6px; vertical-align: -5px; }
+.info-card__legacy img { width: 100%; height: 100%; object-fit: contain; }
+
+.info-card__links {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.info-card__link {
+  padding: 12px 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #0f1a26;
+  color: var(--gold-light);
+  font: 600 15.5px 'Inter', sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.info-card__link:hover { border-color: var(--gold); background: rgba(200, 155, 60, 0.15); }
+.info-card__link.is-guide { border-color: var(--gold); background: rgba(200, 155, 60, 0.18); }
+
+.info-card__equip,
+.info-card__state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 13px 0;
+  border-radius: 4px;
+  font: 600 16.5px 'Inter', sans-serif;
+}
+
+.info-card__equip {
+  border: 1px solid var(--gold);
+  background: rgba(200, 155, 60, 0.2);
+  color: var(--gold-light);
+  cursor: pointer;
+}
+
+.info-card__equip:hover { background: var(--gold); color: #010a13; }
+.info-card__equip.is-equipping { opacity: 0.6; }
+.info-card__equip.is-failed { border-color: #a33; background: rgba(170, 51, 51, 0.4); }
+.info-card__state { border: 1px solid var(--line); color: #a9b4c2; }
+.info-card__state.is-equipped { border-color: var(--gold); color: var(--gold); }
+.info-card__state.is-locked { border-color: var(--none-dim); color: var(--none); }
+
+/* Pictures can be clicked but never dragged out as a copy */
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* Under a champion found through a skin search: the matching skin's name */
+.skin-match-note {
+  display: block;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #8f9aa8;
+}
+
+.skin-match-note.is-owned { color: #7ee8de; }
+
+/* ─── Title bar never overlaps itself on narrow windows ─── */
+.scout-header__title,
+.scout-header__sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scout-header__buttons { flex-shrink: 0; align-items: center; }
+
+/* Toggle labels: full on wide windows, short on narrow ones */
+.chip-short { display: none; }
+body.layout-narrow .chip-long { display: none; }
+body.layout-narrow .chip-short { display: inline; }
+
+/* Skin search: champions you own a matching skin for stand out (teal) */
+.scout-row.is-skin-hit {
+  border-color: rgba(10, 200, 185, 0.55);
+  background: linear-gradient(90deg, rgba(10, 200, 185, 0.14), rgba(10, 200, 185, 0.03) 70%);
+  box-shadow: inset 3px 0 0 #0ac8b9;
+}
+
+/* Skin search: header over the champions you own a matching skin for */
+.scout-section--owned { color: #7ee8de; }
+
+/* Search with "No-skin champs" off: how many gray results are hidden */
+.scout-hidden-hint {
+  margin: 8px 4px 2px;
+  color: var(--none);
+  font-size: 11.5px;
+  line-height: 1.4;
 }

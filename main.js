@@ -500,16 +500,24 @@ async function buildOwnedSkins(creds) {
     const rarity = skinNum === 0 ? 'standard' : detectRarity(skin, cdMap);
 
     const cdEntry = cdMap[skin.id] || {};
-    // Backup image addresses, in order of preference. CommunityDragon's paths
-    // come first; the League client's own paths (if it reported any) after.
+    // Art comes from the CURRENT game files first (CommunityDragon's copy of
+    // them), because Data Dragon still serves pre-rework art for some
+    // champions (e.g. Fiddlesticks' skins before his 2020 visual update).
+    // Data Dragon is only a backup now.
+    const ddLoading = `https://ddragon.leagueoflegends.com/cdn/img/champion/loading/${champ.id}_${skinNum}.jpg`;
+    const ddSplash = `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${champ.id}_${skinNum}.jpg`;
+    const gameLoading = cdAssetUrl(cdEntry.loadScreenPath);
+    const gameSplash = cdAssetUrl(cdEntry.splashPath);
+    // Backup image addresses, in order of preference
     const imageFallbacks = [
-      cdAssetUrl(cdEntry.loadScreenPath),
+      ddLoading,
       cdAssetUrl(skin.loadScreenPath),
       cdAssetUrl(cdEntry.tilePath),
       cdAssetUrl(skin.tilePath),
-      cdAssetUrl(cdEntry.splashPath),
+      gameSplash,
       cdAssetUrl(skin.splashPath),
-    ].filter((u, i, all) => u && all.indexOf(u) === i); // drop blanks & duplicates
+      ddSplash,
+    ].filter((u, i, all) => u && u !== gameLoading && all.indexOf(u) === i); // drop blanks & duplicates
     return {
       id: skin.id,
       name: skin.name || `${champ.name} ${skinNum === 0 ? 'Classic' : 'Skin'}`,
@@ -527,8 +535,8 @@ async function buildOwnedSkins(creds) {
       clientGemPath: typeof skin.rarityGemPath === 'string' ? skin.rarityGemPath : null,
       chromas,
       mastery,
-      splashUrl: `https://ddragon.leagueoflegends.com/cdn/img/champion/splash/${champ.id}_${skinNum}.jpg`,
-      loadingUrl: `https://ddragon.leagueoflegends.com/cdn/img/champion/loading/${champ.id}_${skinNum}.jpg`,
+      splashUrl: gameSplash || ddSplash,
+      loadingUrl: gameLoading || ddLoading,
       imageFallbacks,
       skinLines: (cdEntry.skinLines && cdEntry.skinLines.length) ? cdEntry.skinLines : (skin.skinLines || []),
     };
@@ -664,6 +672,7 @@ function createWindow() {
   });
   ipcMain.on('scout-dismiss', () => scout.dismiss());
   ipcMain.handle('scout-unowned-skins', (event, champId) => scout.unownedSkins(Number(champId)));
+  ipcMain.handle('scout-search-skins', (event, text) => scout.searchSkins(String(text || '')));
   ipcMain.on('scout-guide-mode', (event, keepOpen) => scout.setKeepOpenForGuide(keepOpen));
   // Skin Scout's "Build guide" button: open Skill Capped in a RiftVault tab
   ipcMain.on('scout-open-guide', (event, championKey, role) => {

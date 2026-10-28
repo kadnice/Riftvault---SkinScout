@@ -18,8 +18,8 @@ const stripEl = document.getElementById('scout-strip');
 const focusEl = document.getElementById('scout-focus');
 const subEl = document.getElementById('scout-sub');
 const footerEl = document.querySelector('.scout-footer');
-const searchBtn = document.getElementById('scout-search-btn');
 const searchInput = document.getElementById('scout-search');
+const searchBox = document.querySelector('.scout-search');
 
 const WIDE_MIN_WIDTH = 720;  // at this width or more, use Split/Focus
 const MAX_CARD_WIDTH = 560;  // biggest a skin card may get (px); the art is ~1.8× taller
@@ -227,9 +227,17 @@ function setHtml(el, key, html) {
 }
 
 function imgTag(src, fallbacks, cls = '') {
-  return `<img class="${cls}" src="${escapeHtml(src)}" alt="" loading="lazy"
+  return `<img class="${cls}" src="${escapeHtml(src)}" alt="" loading="lazy" draggable="false"
     data-fallbacks="${escapeHtml(JSON.stringify(fallbacks || []))}" />`;
 }
+
+// No picture can be dragged out as a "ghost" copy (it happened when the mouse
+// moved slightly during a click). Pictures stay clickable.
+document.addEventListener('dragstart', (e) => {
+  if (e.target instanceof HTMLImageElement || (e.target.closest && e.target.closest('img, .focus-card, .scout-skin, .info-card'))) {
+    e.preventDefault();
+  }
+});
 
 function tagsFor(champ) {
   const tags = [];
@@ -299,7 +307,7 @@ function fitFocusCards() {
   const W = grid.clientWidth;
   const H = grid.clientHeight;
   if (W < 50 || H < 50) return; // window not visible yet; we'll re-fit when it is
-  const GAP = 14;
+  const GAP = 10;             // space between cards (matches .focus-cards gap)
   const NAME_H = 34;          // space for the skin name under each card
   const ART_RATIO = 308 / 560; // League loading-screen art is tall and narrow
   let best = { w: 0, cols: count };
@@ -347,26 +355,135 @@ document.getElementById('scout-close').addEventListener('click', () => window.sc
 document.getElementById('scout-open-main').addEventListener('click', () => window.scoutAPI.openMainWindow());
 
 // ─── Search ───────────────────────────────────────────────────────────────────
-function openSearch() {
-  footerEl.classList.add('is-searching');
-  searchInput.focus();
-}
-function closeSearch() {
-  footerEl.classList.remove('is-searching');
+// The search box is always visible; Esc clears it
+function clearSearch() {
   searchInput.value = '';
   searchQuery = '';
+  searchInput.blur();
   if (lastPayload) render(lastPayload);
 }
-searchBtn.addEventListener('click', () => {
-  if (footerEl.classList.contains('is-searching')) closeSearch();
-  else openSearch();
-});
+// Letters and numbers only, so "kaisa" finds Kai'Sa and "nunu" finds Nunu & Willump
+const searchKey = (text) => String(text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// Skins matching the search (by skin name or skin line), from the main process:
+// { query, byChamp: Map(champId -> [{ skinId, name, owned }]), list }
+let skinSearch = { query: '', byChamp: new Map(), list: [] };
+let skinSearchTimer = null;
+
+function requestSkinSearch() {
+  clearTimeout(skinSearchTimer);
+  const q = searchQuery;
+  // 3+ letters: shorter text (e.g. "vi") would match parts of many skin names
+  if (q.length < 3) { skinSearch = { query: q, byChamp: new Map(), list: [] }; return; }
+  skinSearchTimer = setTimeout(async () => {
+    const list = await fetchSkinMatches(q);
+    if (q !== searchQuery) return; // you kept typing
+    if (lastPayload) render(lastPayload);
+  }, 120);
+}
+
+async function fetchSkinMatches(q) {
+  if (skinSearch.query === q) return skinSearch.list;
+  let list = [];
+  try { list = (await window.scoutAPI.searchSkins(q)) || []; } catch (e) { /* no skin data yet */ }
+  const byChamp = new Map();
+  for (const m of list) {
+    if (!byChamp.has(m.champId)) byChamp.set(m.champId, []);
+    byChamp.get(m.champId).push(m);
+  }
+  skinSearch = { query: q, byChamp, list };
+  return list;
+}
+
+// Under a champion found through one of its skins: "Demoncursed Vayne (+1)"
+function skinNoteFor(champ) {
+  if (!searchQuery || skinSearch.query !== searchQuery) return null;
+  if (searchKey(champ.name).includes(searchQuery)) return null; // found by name
+  const hits = skinSearch.byChamp.get(champ.id);
+  if (!hits || !hits.length) return null;
+  const first = hits.find(h => h.owned) || hits[0];
+  const more = hits.length > 1 ? ` (+${hits.length - 1})` : '';
+  return { text: `${first.name}${first.owned ? '' : ' · not owned'}${more}`, owned: first.owned, skinId: first.skinId };
+}
+
 searchInput.addEventListener('input', () => {
-  searchQuery = searchInput.value.trim().toLowerCase();
+  searchBox.classList.remove('is-miss');
+  searchQuery = searchKey(searchInput.value);
+  requestSkinSearch();
   if (lastPayload) render(lastPayload);
 });
+
+// Enter: open the best match. A champion name opens their page; a skin name
+// (e.g. "demon cursed vayne") opens the champion with that skin selected and
+// its info card showing. Then the search clears.
+async function openSearchedChampion() {
+  const q = searchKey(searchInput.value);
+  if (!q || !lastPayload) return;
+  const owned = lastPayload.champions || [];
+  const all = owned.concat(lastPayload.noSkinChamps || []);
+  const key = c => searchKey(c.name);
+  const listed = (id) => all.some(c => c.id === id);
+  const skins = (await fetchSkinMatches(q)).filter(m => listed(m.champId));
+  if (q !== searchKey(searchInput.value)) return; // you kept typing
+  const exactChamp = all.find(c => key(c) === q);
+  const exactSkin = skins.find(m => m.exact);
+  const startChamp = owned.find(c => key(c).startsWith(q)) || all.find(c => key(c).startsWith(q));
+  const skin = exactSkin || (!exactChamp && !startChamp ? skins[0] : null);
+  if (skin && !exactChamp) { await openSearchedSkin(skin); return; }
+  const match = exactChamp || startChamp ||
+    owned.find(c => key(c).includes(q)) || all.find(c => key(c).includes(q));
+  if (!match) {
+    // Nothing found: flash the box red
+    searchBox.classList.remove('is-miss');
+    void searchBox.offsetWidth; // restart the animation
+    searchBox.classList.add('is-miss');
+    return;
+  }
+  userPickId = match.id;
+  inGameChamp = null; // you picked a champion: the panel follows it
+  searchInput.value = '';
+  searchQuery = '';
+  searchInput.blur();
+  render(lastPayload);
+  const rowEl = listEl.querySelector(`.scout-row[data-id="${match.id}"], .scout-strip__item[data-id="${match.id}"]`);
+  if (rowEl) rowEl.scrollIntoView({ block: 'nearest' });
+}
+
+// Same as clicking that skin on the champion's page: select it, equip it (if
+// you own it and can), and show its info card
+async function openSearchedSkin(m, { keepSearch = false } = {}) {
+  if (!m.owned) {
+    // Make sure the skin is on the page: load the champion's unowned skins
+    // and turn "Unowned skins" on
+    try { unownedCache[m.champId] = (await window.scoutAPI.getUnownedSkins(m.champId)) || []; } catch (e) { /* ignore */ }
+    if (!showUnowned) flipUnowned();
+  }
+  userPickId = m.champId;
+  inGameChamp = null;
+  pickedSkinId = m.skinId;
+  pickedSkinChampId = m.champId;
+  pickedSkinName = '';
+  if (!keepSearch) {
+    searchInput.value = '';
+    searchQuery = '';
+    searchInput.blur();
+  }
+  lastHtml.focus = '';
+  render(lastPayload);
+  const rowEl = listEl.querySelector(`.scout-row[data-id="${m.champId}"], .scout-strip__item[data-id="${m.champId}"]`);
+  if (rowEl && !keepSearch) rowEl.scrollIntoView({ block: 'nearest' });
+  const champ = lastFocusChamp;
+  if (!champ || champ.id !== m.champId) return;
+  if (m.owned && champ.canEquip && champ.selectedSkinId !== m.skinId) {
+    const cardEl = bodyEl.querySelector(`.focus-card[data-skin-id="${m.skinId}"]`);
+    if (cardEl) equipFrom(cardEl, m.skinId);
+  }
+  openInfoCard(champ, m.skinId);
+}
+
 searchInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeSearch();
+  if (e.key === 'Escape') clearSearch();
+  else if (e.key === 'Enter') openSearchedChampion();
 });
 
 // ─── Pieces of the page ───────────────────────────────────────────────────────
@@ -453,20 +570,21 @@ const ARAM_SECTIONS = [
   { group: 'team', label: 'Teammates · trade to get' },
 ];
 
-function rowHtml(champ, { selectedId, openIds, layout, compact = false, note = '' }) {
+function rowHtml(champ, { selectedId, openIds, layout, compact = false, note = '', skinNote = null, skinHit = false, dim = false }) {
   const cls = ['scout-row'];
   if (groupOf(champ)) cls.push(`is-${groupOf(champ)}`);
-  if (champ.noSkins) cls.push('is-noskins');
+  if (champ.noSkins || dim) cls.push('is-noskins');
+  if (skinHit) cls.push('is-skin-hit');
   if (compact) cls.push('is-compact');
   const isSelected = champ.id === selectedId;
   if (isSelected) cls.push('is-hovered');
   // Only the small layout opens rows in place; the large layouts show skins in the big panel
   if (layout === 'narrow' && (isSelected || champ.canEquip || openIds.has(champ.id))) cls.push('is-open');
   return `
-    <section class="${cls.join(' ')}" data-id="${champ.id}">
+    <section class="${cls.join(' ')}" data-id="${champ.id}"${skinNote ? ` data-hit-skin="${skinNote.skinId}" data-hit-owned="${skinNote.owned ? 1 : 0}"` : ''}>
       <div class="scout-row__main">
         <img class="scout-row__icon" src="${escapeHtml(champ.iconUrl)}" alt="" />
-        <div class="scout-row__name">${escapeHtml(champ.name)} ${tagsFor(champ)}${note ? `<span class="noskins-note">${escapeHtml(note)}</span>` : ''}</div>
+        <div class="scout-row__name">${escapeHtml(champ.name)} ${tagsFor(champ)}${note ? `<span class="noskins-note">${escapeHtml(note)}</span>` : ''}${skinNote ? `<span class="skin-match-note${skinNote.owned ? ' is-owned' : ''}">${escapeHtml(skinNote.text)}</span>` : ''}</div>
         <button class="scout-row__guide" data-guide="${escapeHtml(champ.key)}" data-id="${champ.id}" title="Skill Capped build guide"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z"/></svg></button>
         <div class="scout-row__count${champ.skinCount ? '' : ' is-zero'}" title="${champ.skinCount} owned skin${champ.skinCount === 1 ? '' : 's'}">${champ.skinCount}</div>
       </div>
@@ -702,8 +820,8 @@ function stepSkinView(dir) {
   openSkinView(lastFocusChamp, list[(i + dir + list.length) % list.length].skin.id);
 }
 
-async function equipFrom(btn) {
-  const skinId = Number(btn.dataset.equip);
+// btn: the button (or card) that shows the "equipping..." state
+async function equipFrom(btn, skinId = Number(btn.dataset.equip)) {
   btn.classList.add('is-equipping');
   const res = await window.scoutAPI.equipSkin(skinId);
   btn.classList.remove('is-equipping');
@@ -713,6 +831,7 @@ async function equipFrom(btn) {
     const card = bodyEl.querySelector(`.focus-card[data-skin-id="${skinId}"], .scout-skin[data-skin-id="${skinId}"]`);
     if (card) card.classList.add('is-equipped');
     if (skinViewId === skinId) openSkinView(lastFocusChamp, skinId); // show "Equipped"
+    if (infoCardSkinId === skinId) openInfoCard(lastFocusChamp, skinId); // show "Equipped"
   } else {
     btn.classList.add('is-failed');
     setTimeout(() => btn.classList.remove('is-failed'), 800);
@@ -736,8 +855,119 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowRight') stepSkinView(1);
 });
 
+// ─── Skin info card (click a skin) ──────────────────────────────────────────
+// A small card next to the skin, like RiftVault's skin view: splash art, tier,
+// name, RP, chromas, and Build guide / Spotlight / 3D model / Wiki + Equip.
+const infoDim = document.createElement('div');
+infoDim.className = 'info-dim is-hidden';
+document.body.appendChild(infoDim);
+const infoCard = document.createElement('div');
+infoCard.className = 'info-card is-hidden';
+document.body.appendChild(infoCard);
+let infoCardSkinId = null;
+
+const INFO_BUTTONS = [ // left to right
+  ['guide', 'Build guide'], ['spotlight', 'Spotlight'], ['model', '3D model'], ['wiki', 'Wiki'],
+];
+
+function openInfoCard(champ, skinId) {
+  const skin = findSkin(champ, skinId);
+  if (!skin) return;
+  const owned = champ.skins.some(s => s.id === skinId);
+  infoCardSkinId = skinId;
+  const tier = tierOf(skin);
+  const chromas = skin.chromas || [];
+  const info = [
+    tier ? `${TIER_ICON[tier]} skin` : '',
+    infoPriceHtml(skin.price),
+    skin.isLegacy ? `${legacyHtml(skin, 'info-card__legacy')} Legacy` : '',
+    chromas.length ? `${chromas.filter(c => c.owned).length} of ${chromas.length} chromas owned` : '',
+  ].filter(Boolean).join('<span class="info-card__dot">·</span>');
+  let action;
+  if (!owned) action = '<div class="info-card__state is-locked">Not owned</div>';
+  else if (skin.id === champ.selectedSkinId) action = `<div class="info-card__state is-equipped">${EQUIP_ICON} Equipped</div>`;
+  else if (champ.canEquip) action = `<button class="info-card__equip" data-equip="${skin.id}">${EQUIP_ICON} Equip</button>`;
+  else action = `<div class="info-card__state">${champ.isMine ? 'Lock in to equip' : 'Equip in champ select'}</div>`;
+  infoCard.classList.toggle('is-unowned', !owned);
+  infoCard.innerHTML = `
+    <div class="info-card__art">${imgTag(skin.splash || skin.img, [skin.img, ...(skin.fallbacks || [])])}
+      <button class="info-card__close" data-info-close title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="info-card__body">
+      <div class="info-card__name">${tier ? tierGemHtml(skin, 'info-card__gem') : ''}<span>${escapeHtml(skin.name)}</span></div>
+      ${info ? `<div class="info-card__info">${info}</div>` : ''}
+      <div class="info-card__links">${INFO_BUTTONS.map(([mode, label]) =>
+        `<button class="info-card__link${mode === 'guide' ? ' is-guide' : ''}" data-info-panel="${mode}">${label}</button>`).join('')}</div>
+      ${action}
+    </div>`;
+  infoDim.classList.remove('is-hidden');
+  infoCard.classList.remove('is-hidden');
+  placeInfoCard();
+}
+
+// Beside the skin you clicked, on whichever side has room
+function placeInfoCard() {
+  if (infoCardSkinId === null) return;
+  const card = bodyEl.querySelector(`.focus-card[data-skin-id="${infoCardSkinId}"]`);
+  const w = infoCard.offsetWidth;
+  const h = infoCard.offsetHeight;
+  const margin = 12;
+  let left = (window.innerWidth - w) / 2;
+  let top = (window.innerHeight - h) / 2;
+  if (card) {
+    const r = card.getBoundingClientRect();
+    if (r.right + 14 + w <= window.innerWidth - margin) left = r.right + 14;
+    else if (r.left - 14 - w >= margin) left = r.left - 14 - w;
+    top = r.top;
+  }
+  left = Math.max(margin, Math.min(left, window.innerWidth - w - margin));
+  top = Math.max(HEADER_HEIGHT + margin, Math.min(top, window.innerHeight - h - margin));
+  infoCard.style.left = `${Math.round(left)}px`;
+  infoCard.style.top = `${Math.round(top)}px`;
+}
+
+function closeInfoCard() {
+  infoCardSkinId = null;
+  infoDim.classList.add('is-hidden');
+  infoCard.classList.add('is-hidden');
+  infoCard.innerHTML = '';
+}
+
+// "[RP icon] 1,350 RP", or "Special distribution" / "Battle Pass" / ...
+function infoPriceHtml(price) {
+  if (!price) return '';
+  if (price.rp) {
+    return `<span class="info-card__price"><img src="assets/icon-riot-points.png" alt="" draggable="false" />${price.rp.toLocaleString('en-US')} RP</span>`;
+  }
+  return `<span class="info-card__price is-special">${escapeHtml(price.label === 'Special' ? 'Special distribution' : price.label)}</span>`;
+}
+
+infoDim.addEventListener('click', closeInfoCard);
+infoCard.addEventListener('click', (e) => {
+  if (e.target.closest('[data-info-close]')) { closeInfoCard(); return; }
+  const equipBtn = e.target.closest('[data-equip]');
+  if (equipBtn) { equipFrom(equipBtn); return; }
+  const link = e.target.closest('[data-info-panel]');
+  if (link) {
+    // Open that page in the side panel, for this skin (it's already the selected one)
+    panelMode = link.dataset.infoPanel;
+    closeInfoCard();
+    if (guideVisible()) { lastHtml.focus = ''; if (lastPayload) render(lastPayload); } else setGuideOpen(true);
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && infoCardSkinId !== null && chromaPopSkinId === null) closeInfoCard();
+});
+window.addEventListener('resize', placeInfoCard);
+
+// Skin you clicked: highlighted until you click another (or change champion)
+function isSelectedSkin(champ, skinId) {
+  return pickedSkinChampId === champ.id && pickedSkinId === skinId;
+}
+
 function focusHtml(champ) {
   lastFocusChamp = champ || null;
+  if (infoCardSkinId !== null && (!champ || !findSkin(champ, infoCardSkinId))) closeInfoCard();
   // The chroma viewer and skin view belong to the champion they were opened for
   if (chromaPopSkinId !== null && (!champ || !findSkin(champ, chromaPopSkinId))) closeChromas();
   if (skinViewId !== null && !viewableSkins(champ).some(x => x.skin.id === skinViewId)) closeSkinView();
@@ -750,7 +980,7 @@ function focusHtml(champ) {
   const unowned = unownedFor(champ);
   const missing = unownedList(champ);   // null while loading
   // The equip hint now lives in the tooltip, to keep the header short
-  const hint = champ.noSkins ? '' : (champ.canEquip ? 'Click a skin to view it, or the check mark to equip it' : (champ.isMine ? 'Lock in to equip from here' : ''));
+  const hint = champ.noSkins ? '' : (champ.canEquip ? 'Click a skin to equip it and see its details' : (champ.isMine ? 'Lock in to equip from here' : ''));
   // "6 / 8 skins owned": owned in gold, total in gray. Until the total is
   // known, just "6 skins owned". "Show unowned" only when something is missing.
   const owned = champ.noSkins ? 0 : champ.skinCount;
@@ -762,21 +992,18 @@ function focusHtml(champ) {
         aria-pressed="${showUnowned}" title="${showUnowned ? 'Hide' : 'Also show'} the skins you don't own">Show unowned</button>`
     : '';
   const panelOpen = guideOpenWide;
-  // While the panel shows a 3D model or Spotlight, mark the skin it's showing
-  const skinPanel = panelOpen && (panelMode === 'model' || panelMode === 'spotlight');
-  const shownSkin = skinPanel ? panelSkin(champ) : null;
   const cards = champ.skins.map(s => {
     const cls = ['focus-card', `focus-card--${escapeHtml(s.rarity)}`];
     if (champ.canEquip) cls.push('can-equip');
     if (s.id === champ.selectedSkinId) cls.push('is-equipped');
-    if (shownSkin && s.id === shownSkin.id) cls.push('is-picked');
+    if (isSelectedSkin(champ, s.id)) cls.push('is-selected');
     return `<figure class="${cls.join(' ')}" data-skin-id="${s.id}" data-champ-id="${champ.id}" title="${escapeHtml(s.name)}">
       <div class="focus-card__art">${imgTag(s.img, s.fallbacks)}${cardOverlaysHtml(s, champ, true)}</div>
       <figcaption class="focus-card__name">${escapeHtml(s.name)}</figcaption>
     </figure>`;
   }).join('') + unowned.map(s => {
-    // Skins you don't own (toggle): dimmed with a lock; still clickable to view, 3D / Spotlight
-    const picked = shownSkin && s.id === shownSkin.id ? ' is-picked' : '';
+    // Skins you don't own (toggle): dimmed with a lock; can be selected / opened
+    const picked = isSelectedSkin(champ, s.id) ? ' is-selected' : '';
     return `<figure class="focus-card is-unowned${picked}" data-skin-id="${s.id}" data-champ-id="${champ.id}" title="${escapeHtml(s.name)} (not owned)">
       <div class="focus-card__art">${imgTag(s.img, s.fallbacks)}${cardOverlaysHtml(s, champ, false)}</div>
       <figcaption class="focus-card__name">${escapeHtml(s.name)}</figcaption>
@@ -803,7 +1030,7 @@ function focusHtml(champ) {
           ${panelOpen && panelMode === 'guide' ? 'Hide guide' : 'Build guide'}
         </button>
         <div class="focus-links">
-          ${['wiki', 'model', 'spotlight'].map(m => `
+          ${['spotlight', 'model', 'wiki'].map(m => `
             <button class="focus-link${panelOpen && panelMode === m ? ' is-active' : ''}" data-panel="${m}"
               title="${panelOpen && panelMode === m ? 'Close' : `Show the ${PANEL_LABELS[m]} below`}">${PANEL_LABELS[m]}</button>`).join('')}
         </div>
@@ -863,9 +1090,25 @@ function render(payload) {
   lastClientPickId = hoverId;
 
   const noSkin = payload.noSkinChamps || [];
-  const matches = c => !searchQuery || c.name.toLowerCase().includes(searchQuery);
-  const shown = champions.filter(matches);
-  const shownNoSkin = noSkin.filter(matches);
+  // Search: champion name, or one of their skins / skin lines
+  // Searching a skin or skin line (e.g. "high noon"):
+  //   you own one  -> listed normally, highlighted, skin name underneath
+  //   you don't    -> moved down to the gray "No skins" section
+  const skinHits = skinSearch.query === searchQuery ? skinSearch.byChamp : new Map();
+  const nameMatch = c => searchKey(c.name).includes(searchQuery);
+  const ownsHit = c => (skinHits.get(c.id) || []).some(h => h.owned);
+  const matches = c => !searchQuery || nameMatch(c) || ownsHit(c);
+  let shown = champions.filter(matches);
+  const unownedOnly = searchQuery ? champions.filter(c => !matches(c) && skinHits.has(c.id)) : [];
+  let shownNoSkin = noSkin.filter(c => matches(c) || skinHits.has(c.id)).concat(unownedOnly);
+  // Skin search: alphabetical, owners first ("Owned"), then the rest ("Not owned")
+  const skinSearching = !!searchQuery && skinHits.size > 0;
+  if (skinSearching) {
+    const byName = (a, b) => a.name.localeCompare(b.name);
+    shown = [...shown].sort(byName);
+    shownNoSkin = [...shownNoSkin].sort(byName);
+  }
+  const skinHitIds = new Set(shown.filter(ownsHit).map(c => c.id));
 
   // Which champion gets the big view (including ones you own no skins for)
   const byId = id => champions.find(c => c.id === id) || noSkin.find(c => c.id === id);
@@ -876,10 +1119,10 @@ function render(payload) {
   let listHtml;
   const openIds = new Set([...listEl.querySelectorAll('.scout-row.is-open:not(.is-hovered)')]
     .map(r => Number(r.dataset.id)));
-  const row = (c, extra = {}) => rowHtml(c, { selectedId, openIds, layout, ...extra });
+  const row = (c, extra = {}) => rowHtml(c, { selectedId, openIds, layout, skinNote: skinNoteFor(c), skinHit: skinHitIds.has(c.id), ...extra });
   const noSkinSection = (list) => list.length
-    ? `<div class="scout-section scout-section--none">No skins (${list.length})</div>` +
-      list.map(c => row(c, { compact: true })).join('')
+    ? `<div class="scout-section scout-section--none">${skinSearching ? 'Not owned' : 'No skins'} (${list.length})</div>` +
+      list.map(c => row(c, { compact: true, dim: true, skinHit: false })).join('')
     : '';
   if (mode === 'bench') {
     // ARAM: you, the bench, teammates — then a gray "No skins" section.
@@ -894,18 +1137,26 @@ function render(payload) {
     if (!listHtml) listHtml = message(searchQuery ? `No champions matching "${searchInput.value.trim()}".` : 'No champions yet.');
   } else {
     // Clicked a champion you own no skins for: show it at the top, grayed out
-    // (unless the "No skin champs" list below already shows it)
-    const temp = selected && selected.noSkins && !showNoSkinChamps
+    // (unless the "No skins" list below already shows it)
+    const inNoSkinList = selected && showNoSkinChamps && shownNoSkin.some(c => c.id === selected.id);
+    const temp = selected && selected.noSkins && !inNoSkinList
       ? `<div class="temp-label">You clicked</div>${row(selected, { note: 'No skins owned' })}<div class="temp-gap"></div>`
       : '';
-    const ownedRows = shown.map(c => row(c)).join('');
-    const extra = showNoSkinChamps ? noSkinSection(shownNoSkin) : '';
-    if (!ownedRows && !extra && !temp) {
+    const ownedRows = (skinSearching && shown.length
+      ? `<div class="scout-section scout-section--owned">Owned (${shown.length})</div>` : '') +
+      shown.map(c => row(c)).join('');
+    // "No-skin champs" decides whether the gray section shows, while
+    // searching too. When it's off, a short note says how many are hidden.
+    const hiddenNote = !showNoSkinChamps && searchQuery && shownNoSkin.length
+      ? `<div class="scout-hidden-hint">${shownNoSkin.length} more ${skinSearching ? 'without a matching skin' : 'with no skins'} · turn on "No-skin champs" to show</div>`
+      : '';
+    const extra = showNoSkinChamps ? noSkinSection(shownNoSkin) : hiddenNote;
+    if (!ownedRows && !temp && !(showNoSkinChamps && shownNoSkin.length)) {
       listHtml = message(searchQuery
         ? `No champions matching "${searchInput.value.trim()}".`
-        : 'None of your pickable champions have skins.');
+        : 'None of your pickable champions have skins.') + hiddenNote;
     } else {
-      listHtml = temp + (ownedRows || (temp ? '' : message('None of your pickable champions have skins.'))) + extra;
+      listHtml = temp + (ownedRows || (temp || searchQuery ? '' : message('None of your pickable champions have skins.'))) + extra;
     }
   }
   const scrollTop = listEl.scrollTop;
@@ -985,24 +1236,47 @@ bodyEl.addEventListener('click', async (e) => {
     equipFrom(equipBtn);
     return;
   }
-  // Clicking a big skin card: show it full-window (and pick it for 3D / Spotlight)
+  // Clicking a big skin card: select it (highlighted, and used by 3D model /
+  // Spotlight), equip it, and open its info card.
   const card = e.target.closest('.focus-card');
   if (card) {
-    openSkinView(lastFocusChamp, Number(card.dataset.skinId));
-    if (guideVisible() && (panelMode === 'model' || panelMode === 'spotlight') && lastPayload) render(lastPayload);
+    const skinId = Number(card.dataset.skinId);
+    if (!isSelectedSkin({ id: Number(card.dataset.champId) }, skinId)) {
+      pickedSkinId = skinId;
+      pickedSkinChampId = Number(card.dataset.champId);
+      pickedSkinName = '';
+      bodyEl.querySelectorAll('.focus-card.is-selected').forEach(el => el.classList.remove('is-selected'));
+      card.classList.add('is-selected');
+      if (guideVisible() && (panelMode === 'model' || panelMode === 'spotlight') && lastPayload) render(lastPayload);
+    }
+    const champ = lastFocusChamp;
+    const owned = champ && champ.skins.some(s => s.id === skinId);
+    if (owned && champ.canEquip && champ.selectedSkinId !== skinId && !card.classList.contains('is-equipping')) {
+      equipFrom(card, skinId);
+    }
+    openInfoCard(champ, skinId);
     return;
   }
   // Small layout thumbnails: click to equip (unchanged)
   const skinEl = e.target.closest('.scout-skin.can-equip');
   if (skinEl) {
-    skinEl.dataset.equip = skinEl.dataset.skinId;
-    equipFrom(skinEl);
+    equipFrom(skinEl, Number(skinEl.dataset.skinId));
     return;
   }
   // Pick a champion for the big view (list rows in Split, icons in Focus)
   const pick = e.target.closest('.scout-strip__item') ||
     (currentLayout() !== 'narrow' && e.target.closest('.scout-row'));
   if (pick) {
+    // Found through a skin search (skin name under the champion): open that
+    // skin's info card on their page. The search stays, so you can keep going.
+    if (pick.dataset.hitSkin) {
+      openSearchedSkin({
+        champId: Number(pick.dataset.id),
+        skinId: Number(pick.dataset.hitSkin),
+        owned: pick.dataset.hitOwned === '1',
+      }, { keepSearch: true });
+      return;
+    }
     userPickId = Number(pick.dataset.id);
     inGameChamp = null; // you picked a champion: the panel follows it
     if (lastPayload) render(lastPayload);
@@ -1030,7 +1304,8 @@ listEl.addEventListener('mouseleave', () => {
 // don't start a drag. You have to move 3 pixels first, so plain clicks and
 // double-clicks still work normally.
 const NOT_DRAGGABLE = 'button, input, a, textarea, select, webview, .scout-row, .focus-card,' +
-  '.scout-skin, .scout-strip__item, .scout-layout-toggle, .scout-guide__view, .resize-grip, .chroma-pop, .skin-view';
+  '.scout-skin, .scout-strip__item, .scout-layout-toggle, .scout-guide__view, .resize-grip, .chroma-pop, .skin-view,' +
+  '.info-card, .info-dim, .scout-search';
 let resizing = false;
 
 // Resize handles on the left, right and bottom edges. Listening on the whole

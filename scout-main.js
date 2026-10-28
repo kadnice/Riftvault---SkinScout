@@ -59,12 +59,25 @@ function readSavedBounds() {
       return saved.x >= a.x - 50 && saved.y >= a.y - 50 &&
         saved.x < a.x + a.width - 50 && saved.y < a.y + a.height - 50;
     });
-    if (onScreen) return saved;
+    // Too small to use comfortably (e.g. saved by an older version, which
+    // started at 310 x 520): use the standard size instead
+    if (onScreen && saved.width >= MIN_WIDTH && saved.height >= MIN_HEIGHT) return saved;
   } catch (e) { /* no saved position yet */ }
+  return defaultBounds();
+}
 
-  // Default: top-right corner of the main monitor
+// Standard starting size: 1100 x 740 (Split layout, big skins), centered on
+// the main monitor, smaller if the monitor is small
+function defaultBounds() {
   const area = screen.getPrimaryDisplay().workArea;
-  return { x: area.x + area.width - 330, y: area.y + 80, width: 310, height: 520 };
+  const width = Math.min(1100, Math.round(area.width * 0.85));
+  const height = Math.min(740, Math.round(area.height * 0.85));
+  return {
+    x: area.x + Math.round((area.width - width) / 2),
+    y: area.y + Math.round((area.height - height) / 2),
+    width,
+    height,
+  };
 }
 
 let collapsedFromHeight = null; // window height before minimizing (null = not minimized)
@@ -291,8 +304,8 @@ function startDrag() {
 // Skin Scout's own resize handles. While you hold one, the window edge follows
 // the cursor (same 144 Hz rhythm as dragging). Electron still allows the app
 // itself to resize a "not resizable" window; only Windows' own handles are off.
-const MIN_WIDTH = 220;
-const MIN_HEIGHT = 160;
+const MIN_WIDTH = 460;  // narrower than this and the title bar can't fit
+const MIN_HEIGHT = 240;
 let resizeTimer = null;
 
 function stopResize() {
@@ -490,6 +503,21 @@ function skinPrice(s) {
   return null; // unknown: show nothing rather than guess
 }
 
+/** Card art: current game art first. Collections saved by older versions
+ *  (skin-cache.json) still list Data Dragon's art first, which is pre-rework
+ *  for some champions (e.g. Fiddlesticks), so swap those around here too. */
+function cardArt(s) {
+  const fallbacks = [...(s.imageFallbacks || [])];
+  let img = s.loadingUrl;
+  const gameArt = fallbacks.findIndex(u => /communitydragon\.org\/.*loadscreen/i.test(u));
+  if (/ddragon\.leagueoflegends\.com/.test(img || '') && gameArt >= 0) {
+    const [current] = fallbacks.splice(gameArt, 1);
+    fallbacks.unshift(img);
+    img = current;
+  }
+  return { img, fallbacks };
+}
+
 /** What the window needs to draw one skin card */
 function skinCard(s) {
   return {
@@ -499,8 +527,7 @@ function skinCard(s) {
     isLegacy: !!s.isLegacy,
     clientGemPath: s.clientGemPath === undefined ? null : s.clientGemPath,
     price: skinPrice(s),
-    img: s.loadingUrl,
-    fallbacks: s.imageFallbacks || [],
+    ...cardArt(s),
     splash: s.splashUrl,          // wide art for the full-window skin view
     chromas: chromaInfo(s),
   };
@@ -872,9 +899,33 @@ function destroy() {
   scoutWindow = null;
 }
 
+/** Search box: skins whose name or skin line matches the text (e.g. "star
+ *  guardian", "demon vi"). Letters and numbers only, like the window's search.
+ *  Returns [{ champId, skinId, name, owned, exact }], best matches first. */
+function searchSkins(text) {
+  const q = clean(text);
+  const data = deps.getSkinData();
+  if (q.length < 3 || !data) return [];
+  const lineNames = data.skinLineNames || {};
+  const results = [];
+  for (const s of data.skins || []) {
+    if (s.isBase || !s.championKey || s.championKey === 'Unknown') continue;
+    const name = clean(s.name);
+    const lines = (s.skinLines || []).map(l => clean(lineNames[l.id] || lineNames[String(l.id)] || ''));
+    let rank = -1;
+    if (name === q) rank = 0;                                     // exact skin name
+    else if (name.startsWith(q)) rank = 1;
+    else if (lines.some(l => l && (l === q || l.startsWith(q)))) rank = 2; // skin line
+    else if (name.includes(q) || lines.some(l => l && l.includes(q))) rank = 3;
+    if (rank >= 0) results.push({ champId: s.championId, skinId: s.id, name: s.name, owned: !!s.owned, rank });
+  }
+  results.sort((a, b) => a.rank - b.rank || (b.owned - a.owned) || a.name.localeCompare(b.name));
+  return results.slice(0, 400).map(r => ({ champId: r.champId, skinId: r.skinId, name: r.name, owned: r.owned, exact: r.rank === 0 }));
+}
+
 module.exports = {
   init, update, clear, togglePreview, dismiss, destroy, windowAction, hideForGame,
-  afterGame, setKeepOpenForGuide, toggleGuideInGame, unownedSkins,
+  afterGame, setKeepOpenForGuide, toggleGuideInGame, unownedSkins, searchSkins,
   // Is this the Skin Scout window? (used to keep panel links inside the panel)
   isScoutHost: (wc) => !!(wc && scoutWindow && !scoutWindow.isDestroyed() && wc === scoutWindow.webContents),
   // Tell the window to show this skin's Spotlight in its panel. False if it can't.

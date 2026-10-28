@@ -17,6 +17,13 @@
       <div class="scout-header__sub" id="scout-sub">Waiting for champ select...</div>
     </div>
     <div class="scout-header__buttons">
+      <!-- Show/hide extras (both off by default) -->
+      <div class="scout-header__toggles">
+        <button class="scout-chip" id="tg-noskin" aria-pressed="false" title="Also list champions you own no skins for">
+          <span class="chip-long">No-skin champs</span><span class="chip-short">No-skin</span></button>
+        <button class="scout-chip" id="tg-unowned" aria-pressed="false" title="Also show skins you don't own (dimmed) in the big view">
+          <span class="chip-long">Unowned skins</span><span class="chip-short">Unowned</span></button>
+      </div>
       <!-- Layout switch: only shown when the window is large -->
       <div class="scout-layout-toggle" id="scout-layout-toggle">
         <button class="scout-layout-toggle__btn" data-layout="split" title="Split: list + big skins">
@@ -89,18 +96,14 @@
   </main>
 
   <footer class="scout-footer">
-    <button class="scout-footer__search-btn" id="scout-search-btn" title="Search champions">
-      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <!-- Search: always visible -->
+    <label class="scout-search" title="Type a champion, skin or skin line. Enter opens the best match (Esc clears)">
+      <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true">
         <circle cx="6.5" cy="6.5" r="4.75" fill="none" stroke="currentColor" stroke-width="1.6" />
         <line x1="10" y1="10" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
       </svg>
-    </button>
-    <input class="scout-footer__input" id="scout-search" type="text" placeholder="Search champions..." spellcheck="false" />
-    <!-- Show/hide extras (both off by default) -->
-    <div class="scout-footer__toggles">
-      <button class="scout-chip" id="tg-noskin" aria-pressed="false" title="Also list champions you own no skins for">No-skin champs</button>
-      <button class="scout-chip" id="tg-unowned" aria-pressed="false" title="Also show skins you don't own (dimmed) in the big view">Unowned skins</button>
-    </div>
+      <input class="scout-search__input" id="scout-search" type="text" placeholder="Search champions or skins..." spellcheck="false" />
+    </label>
     <span class="scout-footer__hint" id="scout-open-main">Open full collection</span>
   </footer>
 

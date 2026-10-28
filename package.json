@@ -1,6 +1,6 @@
 {
   "name": "riftvault",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "RiftVault — A League Skin Collection Viewer",
   "main": "main.js",
   "scripts": {
